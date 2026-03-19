@@ -4,12 +4,14 @@ from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from app.core.config import settings
 
 load_dotenv()
 
-api_key = os.getenv("DASHSCOPE_API_KEY")
-model_name = os.getenv("MODEL_NAME", "qwen-plus")
-base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+api_key = settings.dashscope_api_key
+model_name = settings.model_name
+base_url = settings.dashscope_base_url
+
 
 
 def build_basic_chain():

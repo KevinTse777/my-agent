@@ -3,14 +3,15 @@ import os
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from app.core.config import settings
 
 from app.tools.calculator import calculate
 
 load_dotenv()
 
-api_key = os.getenv("DASHSCOPE_API_KEY")
-model_name = os.getenv("MODEL_NAME", "qwen-plus")
-base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+api_key = settings.dashscope_api_key
+model_name = settings.model_name
+base_url = settings.dashscope_base_url
 
 client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
 

@@ -6,11 +6,14 @@ from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.messages import AIMessage
 from langchain_openai import ChatOpenAI
+from app.core.config import settings
+from app.tools.langchain_tools import calculator_tool, search_mock_tool
 
-from app.tools.langchain_tools import calculator_tool
 
 load_dotenv()
 
+SESSION_STORE: dict[str, list[dict[str, str]]] = {}
+MAX_HISTORY_MESSAGES = 12
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -28,12 +31,9 @@ def _extract_text(content: Any) -> str:
 
 @lru_cache(maxsize=1)
 def _build_agent():
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    model_name = os.getenv("MODEL_NAME", "qwen-plus")
-    base_url = os.getenv(
-        "DASHSCOPE_BASE_URL",
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
+    api_key = settings.dashscope_api_key
+    model_name = settings.model_name
+    base_url = settings.dashscope_base_url
 
     if not api_key:
         raise ValueError("DASHSCOPE_API_KEY is not set")
@@ -47,10 +47,11 @@ def _build_agent():
 
     agent = create_agent(
         model=model,
-        tools=[calculator_tool],
+        tools=[calculator_tool, search_mock_tool],
         system_prompt=(
             "你是学习助手。"
             "遇到需要精确计算的问题时，必须调用 calculator_tool，不要心算。"
+            "遇到概念查询或事实查询时，优先调用 search_mock_tool。"
         ),
     )
     return agent
@@ -87,6 +88,53 @@ def run_agent(user_input: str) -> dict:
             dedup_tools.append(name)
 
     return {
+        "answer": final_answer,
+        "tools_used": dedup_tools,
+    }
+
+
+
+def run_agent_with_session(user_input: str, session_id: str) -> dict:
+    agent = _build_agent()
+
+    history = SESSION_STORE.get(session_id,[])
+    messages = history + [{"role": "user", "content": user_input}]
+
+    result = agent.invoke({"messages": messages})
+
+    result_messages = result.get("messages", [])
+    tools_used: list[str] = []
+    final_answer = ""
+
+    for msg in result_messages:
+        if isinstance(msg, AIMessage):
+            tool_calls = getattr(msg, "tool_calls", []) or []
+            for tc in tool_calls:
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                if name:
+                    tools_used.append(name)
+
+            text = _extract_text(getattr(msg, "content", ""))
+            if text:
+                final_answer = text
+
+
+    updated = history + [
+        {"role": "user", "content": user_input},
+        {"role": "assistant", "content": final_answer},
+    ]
+    SESSION_STORE[session_id] = updated[-MAX_HISTORY_MESSAGES:]
+
+    seen = set()
+    dedup_tools = []
+    for name in tools_used:
+        if name not in seen:
+            seen.add(name)
+            dedup_tools.append(name)
+
+    
+    return {
+        "session_id": session_id,
         "answer": final_answer,
         "tools_used": dedup_tools,
     }
