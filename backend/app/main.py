@@ -8,6 +8,8 @@ from app.llm_chain import build_basic_chain
 from app.tools.calculator import calculate
 from typing import Literal
 from app.tool_calling import chat_with_auto_tool
+from app.agent_service import run_agent
+
 
 
 
@@ -105,6 +107,16 @@ def chat_auto_tool(req: ChatRequest):
     try:
         result = chat_with_auto_tool(req.message)
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/agent")
+def chat_agent(req: ChatRequest):
+    try:
+        return run_agent(req.message)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
