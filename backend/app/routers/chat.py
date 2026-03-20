@@ -10,7 +10,14 @@ from app.tool_calling import chat_with_auto_tool
 from app.tools.calculator import calculate
 from app.core.config import settings
 from app.services.chat_service import agent_chat, chain_chat
-
+from app.schemas.api_response import ApiResponse
+from app.services.chat_service import (
+    agent_chat,
+    agent_session_chat,
+    auto_tool_chat,
+    chain_chat,
+    manual_chat,
+)
 
 api_key = settings.dashscope_api_key
 model_name = settings.model_name
@@ -36,10 +43,11 @@ def chat_simple(req: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
     
 
-@router.post("/chat/chain")
+@router.post("/chat/chain", response_model=ApiResponse)
 def chat_chain(req: ChatRequest):
     try:
-        return chain_chat(req.message)
+        data = chain_chat(req.message)
+        return ApiResponse(data=data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
@@ -63,25 +71,11 @@ class ManualChatRequest(BaseModel):
     message: str
 
 
-@router.post("/chat/manual")
+@router.post("/chat/manual", response_model=ApiResponse)
 def chat_manual(req: ManualChatRequest):
     try:
-        if req.mode == "chat":
-            chain = build_basic_chain()
-            answer = chain.invoke({"user_input": req.message})
-            return {
-                "mode": "chat",
-                "answer": answer,
-                "tools_used": [],
-            }
-
-        # mode == "calculator"
-        result = calculate(req.message)
-        return {
-            "mode": "calculator",
-            "answer": f"计算结果是 {result}",
-            "tools_used": ["calculator"],
-        }
+        data = chain_chat(req.message)
+        return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
