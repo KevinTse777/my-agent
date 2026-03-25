@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from typing import Any
+import time
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
@@ -59,9 +60,11 @@ def _build_agent():
 
 def run_agent(user_input: str) -> dict:
     agent = _build_agent()
+    start = time.perf_counter()
     result = agent.invoke(
         {"messages": [{"role": "user", "content": user_input}]}
     )
+    agent_duration_ms = (time.perf_counter() - start) * 1000
 
     messages = result.get("messages", [])
     tools_used: list[str] = []
@@ -90,6 +93,7 @@ def run_agent(user_input: str) -> dict:
     return {
         "answer": final_answer,
         "tools_used": dedup_tools,
+        "agent_duration_ms": round(agent_duration_ms, 2)
     }
 
 

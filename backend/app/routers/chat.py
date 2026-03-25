@@ -1,6 +1,7 @@
 from typing import Literal
+import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
@@ -94,8 +95,12 @@ def chat_auto_tool(req: ChatRequest):
 
 
 @router.post("/chat/agent")
-def chat_agent(req: ChatRequest):
+def chat_agent(req: ChatRequest, request: Request):
+    start = time.perf_counter()
     try:
+        data = agent_chat(req.message)
+        data["request_id"] = getattr(request.state, "request_id", None)
+        data["route_duration_ms"] = round((time.perf_counter() - start) * 1000, 2)
         return agent_chat(req.message)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
