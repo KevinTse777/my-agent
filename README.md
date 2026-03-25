@@ -1,47 +1,50 @@
 # StudyMate Agent API
 
-一个用于学习 **FastAPI + LangChain + Tool Calling + Agent** 的后端项目。
+[![CI](https://github.com/<YOUR_GITHUB_NAME>/<YOUR_REPO>/actions/workflows/ci.yml/badge.svg)](https://github.com/<YOUR_GITHUB_NAME>/<YOUR_REPO>/actions/workflows/ci.yml)
 
-项目目标是：用循序渐进的方式，从最小聊天接口开始，逐步演进到可调用工具、可维护、可扩展的 Agent 后端服务。
+基于 **FastAPI + LangChain + Tool Calling + Agent** 的学习助手后端项目。
+
+项目目标：从最小聊天接口起步，逐步升级到可工具调用、可观测、可测试、可扩展的 Agent 服务。
 
 ## 项目亮点
 
-- 使用 FastAPI 提供标准 REST API
-- 支持基础聊天（`/chat/simple`）
-- 支持 LangChain chain 调用（`/chat/chain`）
-- 支持手动工具调用（`/tools/calculate`）
-- 支持模型自动 tool calling（`/chat/auto-tool`）
-- 支持 LangChain Agent（`/chat/agent`）
-- 支持基于 `session_id` 的最小会话记忆（内存版，`/chat/agent/session`）
-- 使用 `.env` 管理模型配置
-- 按 `routers / services / tools / schemas / core` 做结构拆分
+- FastAPI API 服务与 Swagger 文档
+- 基础聊天、Chain、Tool Calling、Agent 全链路实践
+- 工具层支持：计算器、模拟搜索、真实 Web 搜索（Tavily）
+- 支持会话化 Agent（`session_id`）
+- 统一异常响应（含 `request_id`）
+- 请求日志 + 工具日志（耗时与成功/失败）
+- pytest 接口测试 + GitHub Actions CI
 
 ## 技术栈
 
 - Python 3.11+
-- FastAPI
-- Uvicorn
-- LangChain
-- langchain-openai
-- OpenAI Python SDK（以阿里百炼 OpenAI 兼容模式调用）
+- FastAPI / Uvicorn
+- LangChain / langchain-openai / langgraph
+- OpenAI SDK（阿里百炼 OpenAI 兼容模式）
+- Tavily Python SDK
 - Pydantic
 - python-dotenv
+- pytest
 
-## 目录结构
+## 项目结构
 
 ```txt
 my-agent/
+├─ .github/workflows/ci.yml
 ├─ .env
 ├─ .gitignore
 ├─ README.md
 └─ backend/
+   ├─ pytest.ini
    └─ app/
       ├─ main.py
       ├─ llm_chain.py
       ├─ tool_calling.py
       ├─ agent_service.py
       ├─ core/
-      │  └─ config.py
+      │  ├─ config.py
+      │  └─ logging.py
       ├─ routers/
       │  ├─ system.py
       │  └─ chat.py
@@ -49,13 +52,16 @@ my-agent/
       │  └─ chat_service.py
       ├─ schemas/
       │  └─ api_response.py
-      └─ tools/
-         ├─ calculator.py
-         ├─ search_mock.py
-         └─ langchain_tools.py
+      ├─ tools/
+      │  ├─ calculator.py
+      │  ├─ search_mock.py
+      │  ├─ search_web.py
+      │  └─ langchain_tools.py
+      └─ tests/
+         └─ test_api.py
 ```
 
-## 环境变量配置
+## 环境变量
 
 在项目根目录创建 `.env`：
 
@@ -63,129 +69,118 @@ my-agent/
 DASHSCOPE_API_KEY=your_dashscope_key
 MODEL_NAME=qwen-plus
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+TAVILY_API_KEY=your_tavily_key
 ```
 
 说明：
-- 使用阿里百炼 OpenAI 兼容模式时，需要设置 `DASHSCOPE_BASE_URL`。
-- `MODEL_NAME` 请替换为你账号可用模型。
+- `DASHSCOPE_*` 用于百炼 OpenAI 兼容调用。
+- `TAVILY_API_KEY` 用于真实 Web 搜索工具。
 
-## 安装与启动
-
-1. 创建并激活虚拟环境（你当前使用 conda 也可以）
-2. 安装依赖
-3. 启动服务
+## 本地启动
 
 ```bash
-pip install fastapi "uvicorn[standard]" openai python-dotenv langchain langchain-openai langgraph
+pip install fastapi "uvicorn[standard]" openai python-dotenv langchain langchain-openai langgraph tavily-python pytest
 uvicorn app.main:app --reload --app-dir backend --port 8000
 ```
 
-启动后访问：
-- 健康检查: `http://127.0.0.1:8000/health`
-- Swagger 文档: `http://127.0.0.1:8000/docs`
+访问：
+- Health: `http://127.0.0.1:8000/health`
+- Docs: `http://127.0.0.1:8000/docs`
 
-## API 一览
-
-### 1) 健康检查
+## API 概览
 
 - `GET /health`
-
-示例响应：
-
-```json
-{"status":"ok"}
-```
-
-### 2) 基础聊天（直连模型）
-
 - `POST /chat/simple`
-
-请求体：
-
-```json
-{"message":"什么是 FastAPI？"}
-```
-
-### 3) LangChain Chain 聊天
-
 - `POST /chat/chain`
-
-请求体：
-
-```json
-{"message":"解释一下什么是 prompt template"}
-```
-
-### 4) 手动工具调用（计算器）
-
 - `POST /tools/calculate`
-
-请求体：
-
-```json
-{"expression":"(12+8)/5"}
-```
-
-### 5) 手动模式聊天（chat/calculator）
-
 - `POST /chat/manual`
-
-请求体：
-
-```json
-{"mode":"chat","message":"请解释 chain"}
-```
-
-或
-
-```json
-{"mode":"calculator","message":"(2+3)*4"}
-```
-
-### 6) 自动 tool calling
-
 - `POST /chat/auto-tool`
-
-请求体：
-
-```json
-{"message":"请计算 (23.5+18.5)*3"}
-```
-
-### 7) LangChain Agent
-
 - `POST /chat/agent`
-
-请求体：
-
-```json
-{"message":"请解释 LangChain 是什么"}
-```
-
-### 8) 带会话记忆的 Agent
-
 - `POST /chat/agent/session`
+- `POST /tools/web-search`
 
-请求体：
+## 示例请求
 
-```json
-{"session_id":"u1","message":"我在学 FastAPI，帮我安排 3 天学习计划"}
+### Agent
+
+```bash
+curl -X POST "http://127.0.0.1:8000/chat/agent" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"请计算 (18+24)/7"}'
 ```
 
-## 当前实现说明
+### Web 搜索工具
 
-- 会话记忆使用进程内存保存，服务重启后会丢失。
-- `search_mock` 是教学用模拟检索工具，后续可替换为真实搜索 API。
-- 项目以“先跑通，再工程化”方式演进，适合作为学习与简历项目基础。
+```bash
+curl -X POST "http://127.0.0.1:8000/tools/web-search" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"FastAPI official docs"}'
+```
 
-## 下一步可扩展方向
+## 统一响应结构
 
-- 接入真实搜索工具（Tavily / SerpAPI / 自建检索）
-- 增加课程知识库工具（RAG）
-- 会话存储升级为 Redis/数据库
-- 增加日志与链路追踪（LangSmith）
+除 `GET /health` 外，大多数接口统一返回：
+
+```json
+{
+  "success": true,
+  "message": "ok",
+  "data": {}
+}
+```
+
+## 系统架构（简化）
+
+- Router：请求入口、参数校验、HTTP 返回
+- Service：业务编排（chat/tool/agent/session）
+- Tools：可被模型调用的能力函数
+- LangChain：chain 与 agent 推理流程
+- Core：配置管理与日志中间件
+
+请求流：`Client -> Router -> Service -> (LangChain Agent -> Tools) -> Response`
+
+## 可观测性
+
+- 每个请求生成 `request_id`，写入响应头 `X-Request-ID`
+- 请求日志包含：方法、路径、状态码、耗时
+- 工具日志包含：工具名、输入、耗时、成功/失败
+- 统一错误响应结构：
+
+```json
+{
+  "success": false,
+  "message": "...",
+  "data": null,
+  "request_id": "..."
+}
+```
+
+## 测试与 CI
+
+本地测试：
+
+```bash
+cd backend
+pytest -q app/tests/test_api.py
+```
+
+CI：
+- GitHub Actions 在 push / pull_request 自动执行测试
+- 工作流文件：`.github/workflows/ci.yml`
+
+## 当前限制
+
+- `session` 为内存存储，服务重启后会丢失
+- 外部搜索能力依赖 Tavily key 和网络可用性
+- 部分 Agent 行为存在模型非确定性
+
+## 后续可扩展方向
+
+- Redis 持久化会话
+- RAG 知识库工具
+- 更严格的来源追踪与答案引用
 - Docker 化与部署
-- 增加接口测试（pytest + httpx）
+- 更细粒度测试（mock LLM/tool 层）
 
 ## License
 

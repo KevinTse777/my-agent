@@ -1,50 +1,56 @@
-from typing import Literal
 import time
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from openai import OpenAI
 
-
-from app.services.chat_service import web_search_debug, agent_chat_with_sources
-from app.agent_service import run_agent, run_agent_with_session
-from app.llm_chain import build_basic_chain
-from app.tool_calling import chat_with_auto_tool
-from app.tools.calculator import calculate
-from app.core.config import settings
-from app.services.chat_service import agent_chat, chain_chat
 from app.schemas.api_response import ApiResponse
 from app.services.chat_service import (
     agent_chat,
     agent_session_chat,
     auto_tool_chat,
+    calculate_chat,
     chain_chat,
     manual_chat,
+    simple_chat,
+    web_search_debug,
 )
 
-api_key = settings.dashscope_api_key
-model_name = settings.model_name
-base_url = settings.dashscope_base_url
-client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
-class ChatRequest(BaseModel):
-    message: str
 router = APIRouter()
 
-@router.post("/chat/simple")
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+class CalcRequest(BaseModel):
+    expression: str
+
+
+class ManualChatRequest(BaseModel):
+    mode: Literal["chat", "calculator"]
+    message: str
+
+
+class SessionChatRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+
+
+@router.post("/chat/simple", response_model=ApiResponse)
 def chat_simple(req: ChatRequest):
-    if client is None:
-        raise HTTPException(status_code=500, detail="DASHSCOPE_API_KEY is not set")
-    
     try:
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role":"user", "content": req.message}],
-        )
-        answer = completion.choices[0].message.content
-        return {"answer": answer}
+        data = simple_chat(req.message)
+        return ApiResponse(data=data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 @router.post("/chat/chain", response_model=ApiResponse)
 def chat_chain(req: ChatRequest):
@@ -53,31 +59,21 @@ def chat_chain(req: ChatRequest):
         return ApiResponse(data=data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
 
-class CalcRequest(BaseModel):
-    expression: str
-
-
-@router.post("/tools/calculate")
+@router.post("/tools/calculate", response_model=ApiResponse)
 def calculate_api(req: CalcRequest):
     try:
-        result = calculate(req.expression)
-        return {"tool": "calculator", "expression": req.expression, "result": result}
+        data = calculate_chat(req.expression)
+        return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-class ManualChatRequest(BaseModel):
-    mode: Literal["chat", "calculator"]
-    message: str
 
 
 @router.post("/chat/manual", response_model=ApiResponse)
 def chat_manual(req: ManualChatRequest):
     try:
-        data = chain_chat(req.message)
+        data = manual_chat(req.mode, req.message)
         return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -85,68 +81,46 @@ def chat_manual(req: ManualChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/chat/auto-tool")
+@router.post("/chat/auto-tool", response_model=ApiResponse)
 def chat_auto_tool(req: ChatRequest):
     try:
-        result = chat_with_auto_tool(req.message)
-        return result
+        data = auto_tool_chat(req.message)
+        return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/chat/agent")
+@router.post("/chat/agent", response_model=ApiResponse)
 def chat_agent(req: ChatRequest, request: Request):
     start = time.perf_counter()
     try:
         data = agent_chat(req.message)
         data["request_id"] = getattr(request.state, "request_id", None)
         data["route_duration_ms"] = round((time.perf_counter() - start) * 1000, 2)
-        return data
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-class SessionChatRequest(BaseModel):
-    session_id: str
-    message: str
-
-
-@router.post("/chat/agent/session")
-def chat_agent_session(req: SessionChatRequest):
-    try:
-        return run_agent_with_session(req.message, req.session_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-class WebSearchRequest(BaseModel):
-    query: str
-
-
-@router.post("/tools/web-search", response_model=ApiResponse)
-def web_search_api(req: WebSearchRequest):
-    try:
-        data = web_search_debug(req.query)
         return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-class AgentWithSourcesRequest(BaseModel):
-    message: str
 
-
-@router.post("/chat/agent/with-sources", response_model=ApiResponse)
-def chat_agent_with_sources(req: AgentWithSourcesRequest):
+@router.post("/chat/agent/session", response_model=ApiResponse)
+def chat_agent_session(req: SessionChatRequest):
     try:
-        data = agent_chat_with_sources(req.message)
+        data = agent_session_chat(req.session_id, req.message)
+        return ApiResponse(data=data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tools/web-search", response_model=ApiResponse)
+def web_search_api(req: WebSearchRequest):
+    try:
+        data = web_search_debug(req.query)
         return ApiResponse(data=data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

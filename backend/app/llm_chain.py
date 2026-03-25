@@ -1,23 +1,14 @@
-import os
-
-from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+
 from app.core.config import settings
 
-load_dotenv()
-
-api_key = settings.dashscope_api_key
-model_name = settings.model_name
-base_url = settings.dashscope_base_url
-
-
-
 def build_basic_chain():
+    api_key = settings.dashscope_api_key
     if not api_key:
         raise ValueError("DASHSCOPE_API_KEY is not set in environment variables.")
-    
+
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", "你是一个简洁、友好的学习助手。"),
@@ -26,9 +17,9 @@ def build_basic_chain():
     )
 
     llm = ChatOpenAI(
-        model=model_name,
+        model=settings.model_name,
         api_key=api_key,
-        base_url=base_url,
+        base_url=settings.dashscope_base_url,
         temperature=0,
     )
 

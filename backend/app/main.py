@@ -2,7 +2,7 @@ import logging
 import time
 import uuid
 
-from fastapi import FastAPI , Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.core.logging import setup_logging
@@ -14,6 +14,7 @@ setup_logging()
 logger = logging.getLogger("app.request")
 
 app = FastAPI(title="StudyMate Agent API", version="0.1.0")
+
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -34,6 +35,7 @@ async def request_logging_middleware(request: Request, call_next):
     )
     response.headers["X-Request-ID"] = request_id
     return response
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):

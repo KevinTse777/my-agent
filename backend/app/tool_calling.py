@@ -1,19 +1,17 @@
 import json
-import os
 
-from dotenv import load_dotenv
 from openai import OpenAI
+from app.tools.calculator import calculate
 from app.core.config import settings
 
-from app.tools.calculator import calculate
-
-load_dotenv()
-
-api_key = settings.dashscope_api_key
-model_name = settings.model_name
-base_url = settings.dashscope_base_url
-
-client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
+client = (
+    OpenAI(
+        api_key=settings.dashscope_api_key,
+        base_url=settings.dashscope_base_url,
+    )
+    if settings.dashscope_api_key
+    else None
+)
 
 
 def chat_with_auto_tool(user_message: str) -> dict:
@@ -49,7 +47,7 @@ def chat_with_auto_tool(user_message: str) -> dict:
     ]
 
     first = client.chat.completions.create(
-        model=model_name,
+        model=settings.model_name,
         messages=messages,
         tools=tools,
         tool_choice="auto",
@@ -96,7 +94,7 @@ def chat_with_auto_tool(user_message: str) -> dict:
             )
 
         second = client.chat.completions.create(
-            model=model_name,
+            model=settings.model_name,
             messages=messages,
         )
         final_answer = second.choices[0].message.content or ""

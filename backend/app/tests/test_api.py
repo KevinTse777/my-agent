@@ -72,7 +72,7 @@ def test_auto_tool_endpoint_mocked(monkeypatch):
             "tools_used": ["calculator"],
         }
 
-    monkeypatch.setattr("app.routers.chat.chat_with_auto_tool", fake_auto_tool)
+    monkeypatch.setattr("app.routers.chat.auto_tool_chat", fake_auto_tool)
 
     resp = client.post("/chat/auto-tool", json={"message": "请计算 2+3"})
     assert resp.status_code == 200

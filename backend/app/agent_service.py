@@ -1,21 +1,18 @@
-import os
+import json
+import time
 from functools import lru_cache
 from typing import Any
-import time
-import json
 
-from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.messages import AIMessage
 from langchain_openai import ChatOpenAI
+
 from app.core.config import settings
-from app.tools.langchain_tools import calculator_tool, search_mock_tool,web_search_tool
-
-
-load_dotenv()
+from app.tools.langchain_tools import calculator_tool, web_search_tool
 
 SESSION_STORE: dict[str, list[dict[str, str]]] = {}
 MAX_HISTORY_MESSAGES = 12
+
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -58,6 +55,7 @@ def _build_agent():
     )
     return agent
 
+
 def _extract_sources_from_tool_messages(messages) -> list[dict]:
     all_sources = []
     for msg in messages:
@@ -90,12 +88,20 @@ def _extract_sources_from_tool_messages(messages) -> list[dict]:
     return dedup
 
 
+def _dedup_keep_order(items: list[str]) -> list[str]:
+    seen = set()
+    dedup = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            dedup.append(item)
+    return dedup
+
+
 def run_agent(user_input: str) -> dict:
     agent = _build_agent()
     start = time.perf_counter()
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": user_input}]}
-    )
+    result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
     agent_duration_ms = (time.perf_counter() - start) * 1000
 
     messages = result.get("messages", [])
@@ -114,13 +120,7 @@ def run_agent(user_input: str) -> dict:
             if text:
                 final_answer = text
 
-    # 去重并保持顺序
-    seen = set()
-    dedup_tools = []
-    for name in tools_used:
-        if name not in seen:
-            seen.add(name)
-            dedup_tools.append(name)
+    dedup_tools = _dedup_keep_order(tools_used)
 
     sources = _extract_sources_from_tool_messages(messages)
 
@@ -128,15 +128,15 @@ def run_agent(user_input: str) -> dict:
         "answer": final_answer,
         "tools_used": dedup_tools,
         "agent_duration_ms": round(agent_duration_ms, 2),
-        "sources": sources    
-}
+        "sources": sources,
+    }
 
 
 
 def run_agent_with_session(user_input: str, session_id: str) -> dict:
     agent = _build_agent()
 
-    history = SESSION_STORE.get(session_id,[])
+    history = SESSION_STORE.get(session_id, [])
     messages = history + [{"role": "user", "content": user_input}]
 
     result = agent.invoke({"messages": messages})
@@ -164,14 +164,8 @@ def run_agent_with_session(user_input: str, session_id: str) -> dict:
     ]
     SESSION_STORE[session_id] = updated[-MAX_HISTORY_MESSAGES:]
 
-    seen = set()
-    dedup_tools = []
-    for name in tools_used:
-        if name not in seen:
-            seen.add(name)
-            dedup_tools.append(name)
+    dedup_tools = _dedup_keep_order(tools_used)
 
-    
     return {
         "session_id": session_id,
         "answer": final_answer,
