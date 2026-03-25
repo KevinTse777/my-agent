@@ -1,10 +1,12 @@
 import logging
 import time
+import json
 
 from langchain.tools import tool
 
 from app.tools.calculator import calculate
 from app.tools.search_mock import search_mock
+from app.tools.search_web import search_web_structured, search_web_text
 
 logger = logging.getLogger("app.tools")
 
@@ -55,3 +57,26 @@ def search_mock_tool(query: str) -> str:
         )
         raise
     
+
+@tool
+def web_search_tool(query: str) -> str:
+    """Search the public web for factual, up-to-date information."""
+    start = time.perf_counter()
+    try:
+        data = search_web_structured(query=query, max_results=3)
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "tool=web_search_tool success=true input=%r duration_ms=%.2f",
+            query,
+            duration_ms,
+        )
+        return json.dumps(data, ensure_ascii=False)
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "tool=web_search_tool success=false input=%r duration_ms=%.2f error=%s",
+            query,
+            duration_ms,
+            str(e),
+        )
+        raise

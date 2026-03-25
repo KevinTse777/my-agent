@@ -2,13 +2,14 @@ import os
 from functools import lru_cache
 from typing import Any
 import time
+import json
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from app.core.config import settings
-from app.tools.langchain_tools import calculator_tool, search_mock_tool
+from app.tools.langchain_tools import calculator_tool, search_mock_tool,web_search_tool
 
 
 load_dotenv()
@@ -48,14 +49,45 @@ def _build_agent():
 
     agent = create_agent(
         model=model,
-        tools=[calculator_tool, search_mock_tool],
+        tools=[calculator_tool, web_search_tool],
         system_prompt=(
             "你是学习助手。"
             "遇到需要精确计算的问题时，必须调用 calculator_tool，不要心算。"
-            "遇到概念查询或事实查询时，优先调用 search_mock_tool。"
+            "涉及最新事实或外部信息时优先使用 web_search_tool。"
         ),
     )
     return agent
+
+def _extract_sources_from_tool_messages(messages) -> list[dict]:
+    all_sources = []
+    for msg in messages:
+        msg_type = getattr(msg, "type", "")
+        if msg_type != "tool":
+            continue
+
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            continue
+
+        try:
+            data = json.loads(content)
+        except Exception:
+            continue
+
+        if isinstance(data, dict) and "sources" in data and isinstance(data["sources"], list):
+            all_sources.extend(data["sources"])
+
+    # 去重（按 url）
+    seen = set()
+    dedup = []
+    for s in all_sources:
+        url = s.get("url", "")
+        key = url or f"{s.get('title','')}-{s.get('snippet','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(s)
+    return dedup
 
 
 def run_agent(user_input: str) -> dict:
@@ -90,11 +122,14 @@ def run_agent(user_input: str) -> dict:
             seen.add(name)
             dedup_tools.append(name)
 
+    sources = _extract_sources_from_tool_messages(messages)
+
     return {
         "answer": final_answer,
         "tools_used": dedup_tools,
-        "agent_duration_ms": round(agent_duration_ms, 2)
-    }
+        "agent_duration_ms": round(agent_duration_ms, 2),
+        "sources": sources    
+}
 
 
 

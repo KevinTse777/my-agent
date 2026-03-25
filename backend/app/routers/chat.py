@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
+
+from app.services.chat_service import web_search_debug, agent_chat_with_sources
 from app.agent_service import run_agent, run_agent_with_session
 from app.llm_chain import build_basic_chain
 from app.tool_calling import chat_with_auto_tool
@@ -101,7 +103,7 @@ def chat_agent(req: ChatRequest, request: Request):
         data = agent_chat(req.message)
         data["request_id"] = getattr(request.state, "request_id", None)
         data["route_duration_ms"] = round((time.perf_counter() - start) * 1000, 2)
-        return agent_chat(req.message)
+        return data
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -123,3 +125,30 @@ def chat_agent_session(req: SessionChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class WebSearchRequest(BaseModel):
+    query: str
+
+
+@router.post("/tools/web-search", response_model=ApiResponse)
+def web_search_api(req: WebSearchRequest):
+    try:
+        data = web_search_debug(req.query)
+        return ApiResponse(data=data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AgentWithSourcesRequest(BaseModel):
+    message: str
+
+
+@router.post("/chat/agent/with-sources", response_model=ApiResponse)
+def chat_agent_with_sources(req: AgentWithSourcesRequest):
+    try:
+        data = agent_chat_with_sources(req.message)
+        return ApiResponse(data=data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
