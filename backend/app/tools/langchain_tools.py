@@ -5,7 +5,6 @@ import time
 from langchain.tools import tool
 
 from app.tools.calculator import calculate
-from app.tools.search_mock import search_mock
 from app.tools.search_web import search_web_structured
 
 logger = logging.getLogger("app.tools")
@@ -28,30 +27,6 @@ def calculator_tool(expression: str) -> str:
         logger.exception(
             "tool=calculator_tool success=false input=%r duration_ms=%.2f error=%s",
             expression,
-            duration_ms,
-            str(e),
-        )
-        raise
-    
-
-@tool
-def search_mock_tool(query: str) -> str:
-    """Search study knowledge from a local mock index. Use for factual lookup questions."""
-    start = time.perf_counter()
-    try:
-        result = search_mock(query)
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "tool=search_mock_tool success=true input=%r duration_ms=%.2f",
-            query,
-            duration_ms,
-        )
-        return result
-    except Exception as e:
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.exception(
-            "tool=search_mock_tool success=false input=%r duration_ms=%.2f error=%s",
-            query,
             duration_ms,
             str(e),
         )

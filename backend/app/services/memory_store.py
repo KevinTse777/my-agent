@@ -1,19 +1,10 @@
 from __future__ import annotations
 
 import json
-import psycopg
-
-from dataclasses import dataclass
 from typing import Protocol
-from redis import Redis
+
 from psycopg_pool import ConnectionPool
-
-
-
-@dataclass(frozen=True)
-class ChatMessage:
-    role: str
-    content: str
+from redis import Redis
 
 
 class MemoryStore(Protocol):
@@ -23,7 +14,26 @@ class MemoryStore(Protocol):
     def append_turn(self, session_id: str, user_input: str, assistant_output: str) -> None:
         ...
 
-from psycopg_pool import ConnectionPool
+
+class InMemoryStore:
+    def __init__(self, max_history_messages: int = 12) -> None:
+        self._max_history_messages = max_history_messages
+        self._store: dict[str, list[dict[str, str]]] = {}
+
+    def load_context(self, session_id: str) -> list[dict[str, str]]:
+        history = self._store.get(session_id, [])
+        return history[-self._max_history_messages :]
+
+    def append_turn(self, session_id: str, user_input: str, assistant_output: str) -> None:
+        history = self._store.get(session_id, [])
+        history.extend(
+            [
+                {"role": "user", "content": user_input},
+                {"role": "assistant", "content": assistant_output},
+            ]
+        )
+        self._store[session_id] = history[-self._max_history_messages :]
+
 
 class PostgresMemoryStore:
     def __init__(self, dsn: str, max_history_messages: int = 12) -> None:
@@ -66,8 +76,6 @@ class PostgresMemoryStore:
         self._pool.close()
 
 
-
-
 class RedisContextStore:
     def __init__(self, redis_url: str, ttl_seconds: int = 1800) -> None:
         self._client = Redis.from_url(redis_url, decode_responses=True)
@@ -86,13 +94,13 @@ class RedisContextStore:
             return []
         return data if isinstance(data, list) else []
 
-
     def save_context(self, session_id: str, messages: list[dict[str, str]]) -> None:
         self._client.set(
             self._key(session_id),
             json.dumps(messages, ensure_ascii=False),
             ex=self._ttl_seconds,
         )
+
 
 class HybridMemoryStore:
     def __init__(
