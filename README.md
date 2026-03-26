@@ -70,11 +70,17 @@ DASHSCOPE_API_KEY=your_dashscope_key
 MODEL_NAME=qwen-plus
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 TAVILY_API_KEY=your_tavily_key
+REDIS_URL=redis://localhost:6379/0
+POSTGRES_URL=postgresql+psycopg://user:password@localhost:5432/studymate
+MEMORY_CONTEXT_WINDOW=12
+MEMORY_CONTEXT_TTL_SECONDS=1800
 ```
 
 说明：
 - `DASHSCOPE_*` 用于百炼 OpenAI 兼容调用。
 - `TAVILY_API_KEY` 用于真实 Web 搜索工具。
+- `REDIS_URL` / `POSTGRES_URL` 预留给会话记忆持久化（当前版本可不填）。
+- `MEMORY_CONTEXT_WINDOW` / `MEMORY_CONTEXT_TTL_SECONDS` 控制短期上下文窗口与 TTL（当前内存实现先使用窗口值）。
 
 ## 本地启动
 
@@ -84,11 +90,17 @@ uvicorn app.main:app --reload --app-dir backend --port 8000
 ```
 
 访问：
+- Root: `http://127.0.0.1:8000/`
 - Health: `http://127.0.0.1:8000/health`
 - Docs: `http://127.0.0.1:8000/docs`
 
+提示：
+- 访问 `GET /` 现在会返回服务信息，不会 404。
+- 若端口冲突报 `Address already in use`，改用 `--port 8001` 或先释放 8000 端口。
+
 ## API 概览
 
+- `GET /`
 - `GET /health`
 - `POST /chat/simple`
 - `POST /chat/chain`

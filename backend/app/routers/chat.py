@@ -2,7 +2,8 @@ import time
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 
 from app.schemas.api_response import ApiResponse
 from app.services.chat_service import (
@@ -20,7 +21,7 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class CalcRequest(BaseModel):
@@ -33,8 +34,8 @@ class ManualChatRequest(BaseModel):
 
 
 class SessionChatRequest(BaseModel):
-    session_id: str
-    message: str
+    session_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class WebSearchRequest(BaseModel):

@@ -1,5 +1,7 @@
 import json
 import time
+import logging
+
 from functools import lru_cache
 from typing import Any
 
@@ -8,10 +10,17 @@ from langchain.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
 from app.core.config import settings
+from app.services.memory_store import InMemoryStore
 from app.tools.langchain_tools import calculator_tool, web_search_tool
+from app.services.memory_store import (
+    HybridMemoryStore,
+    InMemoryStore,
+    PostgresMemoryStore,
+    RedisContextStore,
+)
 
-SESSION_STORE: dict[str, list[dict[str, str]]] = {}
-MAX_HISTORY_MESSAGES = 12
+
+logger = logging.getLogger("app.memory")
 
 
 def _extract_text(content: Any) -> str:
@@ -54,6 +63,51 @@ def _build_agent():
         ),
     )
     return agent
+@lru_cache(maxsize=1)
+def _build_memory_store():
+    max_window = settings.memory_context_window
+
+    # 1) Redis + PostgreSQL
+    if settings.postgres_url and settings.redis_url:
+        try:
+            pg_store = PostgresMemoryStore(
+                dsn=settings.postgres_url,
+                max_history_messages=max_window,
+            )
+            redis_store = RedisContextStore(
+                redis_url=settings.redis_url,
+                ttl_seconds=settings.memory_context_ttl_seconds,
+            )
+            logger.info("memory_store=hybrid redis+postgres")
+
+            return HybridMemoryStore(
+                pg_store=pg_store,
+                redis_store=redis_store,
+                max_history_messages=max_window,
+            )
+        except Exception as e:
+            logger.warning("hybrid init failed: %s", e)
+
+
+    # 2) 仅 PostgreSQL
+    if settings.postgres_url:
+        try:
+            logger.info("memory_store=postgres_only")
+
+            return PostgresMemoryStore(
+                dsn=settings.postgres_url,
+                max_history_messages=max_window,
+            )
+        except Exception as e:
+            logger.warning("postgres init failed: %s", e)
+
+
+    # 3) 回退内存
+    logger.warning("memory_store=inmemory_fallback")
+
+    return InMemoryStore(max_history_messages=max_window)
+
+
 
 
 def _extract_sources_from_tool_messages(messages) -> list[dict]:
@@ -135,8 +189,9 @@ def run_agent(user_input: str) -> dict:
 
 def run_agent_with_session(user_input: str, session_id: str) -> dict:
     agent = _build_agent()
+    memory_store = _build_memory_store()
 
-    history = SESSION_STORE.get(session_id, [])
+    history = memory_store.load_context(session_id)
     messages = history + [{"role": "user", "content": user_input}]
 
     result = agent.invoke({"messages": messages})
@@ -157,12 +212,11 @@ def run_agent_with_session(user_input: str, session_id: str) -> dict:
             if text:
                 final_answer = text
 
-
-    updated = history + [
-        {"role": "user", "content": user_input},
-        {"role": "assistant", "content": final_answer},
-    ]
-    SESSION_STORE[session_id] = updated[-MAX_HISTORY_MESSAGES:]
+    memory_store.append_turn(
+        session_id=session_id,
+        user_input=user_input,
+        assistant_output=final_answer,
+    )
 
     dedup_tools = _dedup_keep_order(tools_used)
 

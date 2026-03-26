@@ -1,6 +1,7 @@
 import { request } from './client'
 
 const CHAT_ENDPOINT = import.meta.env.VITE_CHAT_ENDPOINT || '/chat/agent'
+const SESSION_CHAT_ENDPOINT = '/chat/agent/session'
 
 function pickData(payload) {
   if (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object') {
@@ -41,6 +42,26 @@ export async function sendChatMessage(message) {
   const data = pickData(payload)
 
   return {
+    answer: typeof data.answer === 'string' ? data.answer : '',
+    toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
+    sources: normalizeSources(data),
+    requestId: data.request_id || payload?.request_id || null,
+  }
+}
+
+export async function sendSessionChatMessage(sessionId, message) {
+  const payload = await request(SESSION_CHAT_ENDPOINT, {
+    method: 'POST',
+    body: {
+      session_id: sessionId,
+      message,
+    },
+  })
+
+  const data = pickData(payload)
+
+  return {
+    sessionId: data.session_id || sessionId,
     answer: typeof data.answer === 'string' ? data.answer : '',
     toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
     sources: normalizeSources(data),

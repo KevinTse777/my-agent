@@ -2,11 +2,13 @@
   <div class="chat-input-wrap">
     <form class="chat-input-form" @submit.prevent="handleSubmit">
       <textarea
+        ref="textareaRef"
         v-model="inputValue"
         class="chat-textarea"
         :disabled="loading"
         rows="1"
         placeholder="输入你的问题，按 Enter 发送，Shift + Enter 换行"
+        @input="adjustTextareaHeight"
         @keydown="handleKeydown"
       ></textarea>
       <button class="send-btn" type="submit" :disabled="loading || !canSend">
@@ -18,7 +20,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   loading: {
@@ -33,7 +35,17 @@ const props = defineProps({
 
 const emit = defineEmits(['send'])
 const inputValue = ref('')
+const textareaRef = ref(null)
 const canSend = computed(() => inputValue.value.trim().length > 0)
+
+function adjustTextareaHeight() {
+  const textarea = textareaRef.value
+  if (!textarea) {
+    return
+  }
+  textarea.style.height = 'auto'
+  textarea.style.height = `${textarea.scrollHeight}px`
+}
 
 function handleSubmit() {
   const text = inputValue.value.trim()
@@ -42,6 +54,9 @@ function handleSubmit() {
   }
   emit('send', text)
   inputValue.value = ''
+  nextTick(() => {
+    adjustTextareaHeight()
+  })
 }
 
 function handleKeydown(event) {
@@ -50,6 +65,12 @@ function handleKeydown(event) {
     handleSubmit()
   }
 }
+
+watch(inputValue, () => {
+  nextTick(() => {
+    adjustTextareaHeight()
+  })
+})
 </script>
 
 <style scoped>
@@ -70,6 +91,7 @@ function handleKeydown(event) {
   resize: none;
   min-height: 44px;
   max-height: 140px;
+  overflow-y: auto;
   border: 1px solid #bfd1df;
   border-radius: 12px;
   padding: 10px 12px;

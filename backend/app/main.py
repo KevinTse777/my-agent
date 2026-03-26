@@ -16,6 +16,16 @@ logger = logging.getLogger("app.request")
 app = FastAPI(title="StudyMate Agent API", version="0.1.0")
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "StudyMate Agent API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
     request_id = str(uuid.uuid4())[:8]
