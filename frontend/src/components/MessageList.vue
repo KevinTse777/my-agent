@@ -59,7 +59,10 @@ async function scrollToBottom() {
 }
 
 watch(
-  () => [props.messages.length, props.loading],
+  () => {
+    const lastMessage = props.messages[props.messages.length - 1]
+    return [props.messages.length, props.loading, lastMessage?.content || '']
+  },
   () => {
     scrollToBottom()
   },

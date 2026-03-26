@@ -4,6 +4,7 @@
 - `GET /health` 健康检查
 - `POST /chat/agent` 单轮 Agent 对话
 - `POST /chat/agent/session` 带会话记忆的 Agent 对话
+- `POST /chat/agent/session/stream` 带会话记忆的流式对话（NDJSON）
 
 ## 目录结构
 ```txt

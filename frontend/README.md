@@ -3,7 +3,7 @@
 ## 功能概览
 - Vue 3 + Vite 单页聊天应用
 - 本地会话列表（浏览器 LocalStorage）
-- 与后端 `/chat/agent/session` 联调
+- 与后端 `/chat/agent/session/stream` 流式联调（默认）
 
 ## 运行方式
 ```bash

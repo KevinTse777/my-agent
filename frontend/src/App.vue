@@ -45,7 +45,7 @@
         </header>
 
         <MessageList :messages="activeMessages" :loading="loading" />
-        <ChatInput :loading="loading" :error="errorMessage" @send="onSend" />
+        <ChatInput :loading="loading" :error="errorMessage" @send="onSend" @stop="onStop" />
       </main>
     </div>
   </div>
@@ -55,7 +55,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import MessageList from './components/MessageList.vue'
 import ChatInput from './components/ChatInput.vue'
-import { sendSessionChatMessage } from './api/chat'
+import { sendSessionChatMessageStream } from './api/chat'
 import {
   createSessionDraft,
   loadSessions,
@@ -67,6 +67,7 @@ const sessions = ref([])
 const activeSessionId = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
+const streamAbortController = ref(null)
 
 const activeSession = computed(() =>
   sessions.value.find((session) => session.id === activeSessionId.value) || null
@@ -151,6 +152,18 @@ function updateSession(sessionId, updater) {
   })
 }
 
+function updateMessageInSession(sessionId, messageId, updater) {
+  updateSession(sessionId, (session) => ({
+    ...session,
+    messages: session.messages.map((msg) => {
+      if (msg.id !== messageId) {
+        return msg
+      }
+      return updater(msg)
+    }),
+  }))
+}
+
 function bringSessionToTop(sessionId) {
   const index = sessions.value.findIndex((session) => session.id === sessionId)
   if (index <= 0) {
@@ -170,14 +183,24 @@ async function onSend(text) {
 
   errorMessage.value = ''
   const now = new Date().toISOString()
+  let assistantMessageId = 0
 
   updateSession(currentSession.id, (session) => {
+    const baseId = session.messages.length + 1
+    assistantMessageId = baseId + 1
     const nextMessages = [
       ...session.messages,
       {
-        id: session.messages.length + 1,
+        id: baseId,
         role: 'user',
         content: trimmed,
+        toolsUsed: [],
+        sources: [],
+      },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
         toolsUsed: [],
         sources: [],
       },
@@ -192,22 +215,52 @@ async function onSend(text) {
   bringSessionToTop(currentSession.id)
 
   loading.value = true
+  const controller = new AbortController()
+  streamAbortController.value = controller
 
   try {
-    const result = await sendSessionChatMessage(currentSession.id, trimmed)
+    const result = await sendSessionChatMessageStream(currentSession.id, trimmed, {
+      onToken(token) {
+        updateMessageInSession(currentSession.id, assistantMessageId, (msg) => ({
+          ...msg,
+          content: `${msg.content || ''}${token}`,
+        }))
+      },
+      onTool(toolName) {
+        updateMessageInSession(currentSession.id, assistantMessageId, (msg) => {
+          const currentTools = Array.isArray(msg.toolsUsed) ? msg.toolsUsed : []
+          if (currentTools.includes(toolName)) {
+            return msg
+          }
+          return {
+            ...msg,
+            toolsUsed: [...currentTools, toolName],
+          }
+        })
+      },
+      onSources(nextSources) {
+        updateMessageInSession(currentSession.id, assistantMessageId, (msg) => ({
+          ...msg,
+          sources: Array.isArray(nextSources) ? nextSources : [],
+        }))
+      },
+    }, {
+      signal: controller.signal,
+    })
     const answerAt = new Date().toISOString()
 
     updateSession(currentSession.id, (session) => {
-      const nextMessages = [
-        ...session.messages,
-        {
-          id: session.messages.length + 1,
-          role: 'assistant',
-          content: result.answer || '助手未返回文本内容',
-          toolsUsed: result.toolsUsed || [],
-          sources: result.sources || [],
-        },
-      ]
+      const nextMessages = session.messages.map((msg) => {
+        if (msg.id !== assistantMessageId) {
+          return msg
+        }
+        return {
+          ...msg,
+          content: msg.content || result.answer || '助手未返回文本内容',
+          toolsUsed: Array.isArray(result.toolsUsed) ? result.toolsUsed : [],
+          sources: Array.isArray(result.sources) ? result.sources : [],
+        }
+      })
       return {
         ...session,
         updatedAt: answerAt,
@@ -216,10 +269,23 @@ async function onSend(text) {
     })
     bringSessionToTop(currentSession.id)
   } catch (error) {
-    errorMessage.value = error.message || '请求失败，请稍后重试'
+    const cancelled = error?.message === '请求已取消'
+    updateMessageInSession(currentSession.id, assistantMessageId, (msg) => ({
+      ...msg,
+      content: msg.content || (cancelled ? '已停止生成' : '响应中断，请稍后重试'),
+    }))
+    errorMessage.value = cancelled ? '' : (error.message || '请求失败，请稍后重试')
   } finally {
     loading.value = false
+    streamAbortController.value = null
   }
+}
+
+function onStop() {
+  if (!loading.value) {
+    return
+  }
+  streamAbortController.value?.abort()
 }
 </script>
 

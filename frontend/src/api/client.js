@@ -11,6 +11,10 @@ function buildUrl(path) {
   return `${API_BASE_URL}${path}`
 }
 
+export function buildApiUrl(path) {
+  return buildUrl(path)
+}
+
 function extractErrorMessage(payload, fallback) {
   if (!payload) {
     return fallback
@@ -56,5 +60,20 @@ export async function request(path, options = {}) {
     throw error
   } finally {
     window.clearTimeout(timeoutId)
+  }
+}
+
+export function createTimeoutSignal(timeoutMs = API_TIMEOUT) {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  return {
+    signal: controller.signal,
+    cancel: () => {
+      controller.abort()
+      window.clearTimeout(timeoutId)
+    },
+    clear: () => {
+      window.clearTimeout(timeoutId)
+    },
   }
 }

@@ -1,6 +1,6 @@
 <template>
   <div class="chat-input-wrap">
-    <form class="chat-input-form" @submit.prevent="handleSubmit">
+    <form class="chat-input-form" @submit.prevent="handleSubmitOrStop">
       <textarea
         ref="textareaRef"
         v-model="inputValue"
@@ -10,9 +10,11 @@
         placeholder="输入你的问题，按 Enter 发送，Shift + Enter 换行"
         @input="adjustTextareaHeight"
         @keydown="handleKeydown"
+        @compositionstart="handleCompositionStart"
+        @compositionend="handleCompositionEnd"
       ></textarea>
-      <button class="send-btn" type="submit" :disabled="loading || !canSend">
-        {{ loading ? '发送中...' : '发送' }}
+      <button class="send-btn" type="submit" :disabled="!loading && !canSend">
+        {{ loading ? '停止' : '发送' }}
       </button>
     </form>
     <p v-if="error" class="error-text">{{ error }}</p>
@@ -33,9 +35,10 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['send'])
+const emit = defineEmits(['send', 'stop'])
 const inputValue = ref('')
 const textareaRef = ref(null)
+const composing = ref(false)
 const canSend = computed(() => inputValue.value.trim().length > 0)
 
 function adjustTextareaHeight() {
@@ -59,11 +62,30 @@ function handleSubmit() {
   })
 }
 
+function handleSubmitOrStop() {
+  if (props.loading) {
+    emit('stop')
+    return
+  }
+  handleSubmit()
+}
+
 function handleKeydown(event) {
+  if (event.isComposing || composing.value || event.keyCode === 229) {
+    return
+  }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     handleSubmit()
   }
+}
+
+function handleCompositionStart() {
+  composing.value = true
+}
+
+function handleCompositionEnd() {
+  composing.value = false
 }
 
 watch(inputValue, () => {

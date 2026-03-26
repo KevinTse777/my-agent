@@ -63,3 +63,29 @@ def test_agent_session_endpoint_mocked(monkeypatch):
 
     assert payload["session_id"] == "sess_test_001"
     assert payload["answer"].startswith("mocked session answer")
+
+
+def test_agent_session_stream_endpoint_mocked(monkeypatch):
+    async def fake_stream(session_id: str, message: str):
+        yield {"type": "token", "content": "你好"}
+        yield {
+            "type": "end",
+            "session_id": session_id,
+            "answer": f"mocked stream answer for: {message}",
+            "tools_used": ["calculator_tool"],
+            "sources": [],
+            "agent_duration_ms": 10.0,
+        }
+
+    monkeypatch.setattr("app.routers.chat.agent_session_chat_stream", fake_stream)
+
+    resp = client.post(
+        "/chat/agent/session/stream",
+        json={"session_id": "sess_test_stream_001", "message": "流式测试"},
+    )
+    assert resp.status_code == 200
+    lines = [line for line in resp.text.splitlines() if line.strip()]
+    assert len(lines) >= 2
+    assert '"type": "start"' in lines[0]
+    assert any('"type": "token"' in line for line in lines)
+    assert any('"type": "end"' in line for line in lines)
