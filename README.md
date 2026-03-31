@@ -8,6 +8,10 @@
 ## 当前版本目标
 这个版本是“瘦身版”，只保留前端实际使用的后端主链路，方便部署、维护和继续演进。
 
+## 工业化落地文档
+- 计划书与开发边界：[`docs/industrial_product_plan.md`](docs/industrial_product_plan.md)
+- 路线图与任务清单（Backlog）：[`docs/roadmap_backlog.md`](docs/roadmap_backlog.md)
+
 ## 后端接口（瘦身后）
 - `GET /` 服务信息
 - `GET /health` 健康检查
