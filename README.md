@@ -11,6 +11,8 @@
 ## 工业化落地文档
 - 计划书与开发边界：[`docs/industrial_product_plan.md`](docs/industrial_product_plan.md)
 - 路线图与任务清单（Backlog）：[`docs/roadmap_backlog.md`](docs/roadmap_backlog.md)
+- 工程职责边界：[`docs/engineering_guardrails.md`](docs/engineering_guardrails.md)
+- 环境与密钥规范：[`docs/env_and_secrets.md`](docs/env_and_secrets.md)
 
 ## 后端接口（瘦身后）
 - `GET /` 服务信息
