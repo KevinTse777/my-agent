@@ -4,6 +4,9 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.auth_store import get_auth_store
 from app.services.chat_store import get_chat_store
+from app.services.task_broker import ChatTaskJob, get_task_broker
+from app.services.task_store import get_task_store
+from app.services.task_worker import get_task_worker
 
 client = TestClient(app)
 
@@ -12,9 +15,15 @@ client = TestClient(app)
 def reset_stores():
     get_chat_store.cache_clear()
     get_auth_store.cache_clear()
+    get_task_store.cache_clear()
+    get_task_broker.cache_clear()
+    get_task_worker.cache_clear()
     yield
     get_chat_store.cache_clear()
     get_auth_store.cache_clear()
+    get_task_store.cache_clear()
+    get_task_broker.cache_clear()
+    get_task_worker.cache_clear()
 
 
 def register_and_login(email: str = "test@example.com", username: str = "tester", password: str = "password123"):
@@ -210,3 +219,115 @@ def test_agent_session_stream_endpoint_mocked(monkeypatch):
     assert '"type": "start"' in lines[0]
     assert any('"type": "token"' in line for line in lines)
     assert any('"type": "end"' in line for line in lines)
+
+
+def test_chat_task_lifecycle_success(monkeypatch):
+    auth = register_and_login()
+
+    processed_jobs: list[ChatTaskJob] = []
+
+    def fake_enqueue(job: ChatTaskJob):
+        processed_jobs.append(job)
+        get_task_worker().process_job(job)
+
+    def fake_run_agent_with_session(message: str, session_id: str):
+        return {
+            "session_id": session_id,
+            "answer": f"异步结果：{message}",
+            "tools_used": ["calculator_tool"],
+            "sources": [{"title": "async", "url": "https://example.com/async"}],
+        }
+
+    monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+    monkeypatch.setattr("app.services.chat_service.run_agent_with_session", fake_run_agent_with_session)
+
+    create_resp = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_001", "message": "帮我异步处理这段文本"},
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert create_resp.status_code == 200
+    task = create_resp.json()["data"]
+    assert task["status"] == "queued"
+    assert processed_jobs
+
+    status_resp = client.get(
+        f"/chat/tasks/{task['id']}",
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert status_resp.status_code == 200
+    status_data = status_resp.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result"]["answer"] == "异步结果：帮我异步处理这段文本"
+
+    result_resp = client.get(
+        f"/chat/tasks/{task['id']}/result",
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert result_resp.status_code == 200
+    result_data = result_resp.json()["data"]
+    assert result_data["status"] == "succeeded"
+    assert result_data["result"]["tools_used"] == ["calculator_tool"]
+
+    messages_resp = client.get(
+        "/chat/sessions/sess_task_001/messages",
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert messages_resp.status_code == 200
+    messages = messages_resp.json()["data"]["messages"]
+    assert len(messages) == 2
+    assert messages[1]["content"] == "异步结果：帮我异步处理这段文本"
+
+
+def test_chat_task_result_not_ready(monkeypatch):
+    auth = register_and_login()
+
+    captured_jobs: list[ChatTaskJob] = []
+
+    def fake_enqueue(job: ChatTaskJob):
+        captured_jobs.append(job)
+
+    monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+
+    create_resp = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_pending_001", "message": "稍后处理"},
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert create_resp.status_code == 200
+    task_id = create_resp.json()["data"]["id"]
+    assert captured_jobs
+
+    result_resp = client.get(
+        f"/chat/tasks/{task_id}/result",
+        headers=auth_headers(auth["access_token"]),
+    )
+    assert result_resp.status_code == 409
+
+
+def test_chat_task_access_isolated_between_users(monkeypatch):
+    first = register_and_login("task1@example.com", "task1", "password123")
+    second = register_and_login("task2@example.com", "task2", "password123")
+
+    def fake_enqueue(job: ChatTaskJob):
+        get_task_worker().process_job(job)
+
+    def fake_run_agent_with_session(message: str, session_id: str):
+        return {"session_id": session_id, "answer": "ok", "tools_used": [], "sources": []}
+
+    monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+    monkeypatch.setattr("app.services.chat_service.run_agent_with_session", fake_run_agent_with_session)
+
+    create_resp = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_private_001", "message": "只属于第一个用户"},
+        headers=auth_headers(first["access_token"]),
+    )
+    assert create_resp.status_code == 200
+    task_id = create_resp.json()["data"]["id"]
+
+    forbidden = client.get(
+        f"/chat/tasks/{task_id}",
+        headers=auth_headers(second["access_token"]),
+    )
+    assert forbidden.status_code == 404

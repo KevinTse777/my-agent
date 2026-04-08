@@ -1,6 +1,6 @@
-# Agent.md
+# AGENTS.md
 
-本文件面向进入本仓库协作的开发代理或工程同学，帮助快速理解项目目标、架构边界与安全修改方式。
+本文件面向进入本仓库协作的开发代理或工程同学，帮助快速理解项目目标、当前阶段状态、架构边界与安全修改方式。
 
 ## 1. 项目概览
 
@@ -9,9 +9,14 @@
 - 前端：`Vue 3 + Vite`
 - 后端：`FastAPI + LangChain Agent`
 - 当前核心能力：
+  - 用户注册、登录、刷新 token、退出登录、`/me`
+  - 业务会话列表、消息历史、会话删除
   - 单轮对话
   - 带会话记忆的多轮对话
   - 工具调用（计算、Web 搜索）
+  - 会话级权限隔离
+
+当前项目已经从“匿名 Agent 原型”推进到“具备最小用户体系和业务会话体系的 Web 服务”阶段。
 
 
 ## 2. 当前对外接口
@@ -20,18 +25,32 @@
 
 - `GET /`
 - `GET /health`
+- `POST /auth/register`
+- `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /auth/logout`
+- `GET /me`
+- `GET /chat/sessions`
+- `POST /chat/sessions`
+- `GET /chat/sessions/{id}/messages`
+- `DELETE /chat/sessions/{id}`
 - `POST /chat/agent`
 - `POST /chat/agent/session`
 - `POST /chat/agent/session/stream`
 
 前端默认通过 Vite 代理的 `/api` 前缀访问后端。
 
+接口访问边界：
+
+- 无需登录：`GET /`、`GET /health`、`POST /chat/agent`
+- 需要登录：`GET /me`、业务会话接口、带会话聊天接口
+
 ## 3. 仓库结构
 
 ```txt
 my-agent/
 ├─ README.md
-├─ Agent.md
+├─ AGENTS.md
 ├─ docs/
 │  ├─ architecture.md
 │  ├─ engineering_guardrails.md
@@ -46,6 +65,7 @@ my-agent/
 │  └─ app/
 │     ├─ main.py
 │     ├─ core/
+│     ├─ dependencies/
 │     ├─ routers/
 │     ├─ services/
 │     ├─ schemas/
@@ -67,6 +87,9 @@ my-agent/
 - `backend/app/services`
   - 业务与 Agent 编排层
   - 负责流程、策略、异常归一、跨组件组合
+- `backend/app/dependencies`
+  - FastAPI 依赖注入层
+  - 用于当前用户解析、鉴权等请求前置逻辑
 - `backend/app/tools`
   - 外部能力封装层
   - 提供稳定输入输出，负责超时、失败语义和第三方集成
@@ -80,11 +103,12 @@ my-agent/
 
 允许依赖方向：
 
-`routers -> services -> tools/core`
+`routers -> dependencies/services -> tools/core`
 
 补充规则：
 
-- `routers` 可依赖 `schemas`、`services`、`core`
+- `routers` 可依赖 `schemas`、`services`、`dependencies`、`core`
+- `dependencies` 可依赖 `services`、`core`
 - `services` 可依赖 `tools`、`core`、`schemas`
 - `tools` 只能依赖 `core` 与第三方 SDK
 - `tools` 禁止依赖 `routers`
@@ -108,6 +132,20 @@ my-agent/
 
 `Frontend -> /api -> FastAPI routers -> chat_service -> agent_service -> LangChain Agent -> tools`
 
+当前业务层已拆分为两条概念上不同的链路：
+
+- 记忆层：`memory_store`
+  - 只服务 Agent 上下文拼接
+  - 优先 `Postgres + Redis`，其次 `Postgres`，最后 `InMemory`
+- 业务层：`chat_store`
+  - 负责正式业务会话与消息
+  - 当前已绑定 `user_id`
+  - 为历史记录、权限隔离、后续异步任务回写提供基础
+
+用户与鉴权链路如下：
+
+`Frontend -> /api -> auth router / dependency -> auth_service -> auth_store`
+
 会话记忆策略：
 
 - 优先 `Postgres + Redis`
@@ -117,8 +155,10 @@ my-agent/
 这意味着涉及会话能力的改动时，需要特别注意：
 
 - `session_id` 的传递是否稳定
+- `user_id` 是否正确绑定到业务会话
 - 存储不可用时的回退行为
 - 非流式和流式接口的行为是否一致
+- 不要把 `memory_store` 和 `chat_store` 混为一层
 
 ## 7. 本地启动
 
@@ -157,6 +197,9 @@ npm run dev
 - `TAVILY_API_KEY`
 - `POSTGRES_URL`
 - `REDIS_URL`
+- `AUTH_SECRET_KEY`
+- `AUTH_ACCESS_TOKEN_TTL_SECONDS`
+- `AUTH_REFRESH_TOKEN_TTL_SECONDS`
 - `VITE_API_BASE_URL`
 
 除非用户明确要求，否则不要在仓库中写入真实密钥。
@@ -166,14 +209,16 @@ npm run dev
 进行开发时，请优先遵守以下原则：
 
 - 新功能优先落在 `services`，避免把业务逻辑堆进 `routers`
+- 鉴权和当前用户解析优先放在 `dependencies`，不要在每个路由里手写重复逻辑
 - 新外部能力优先新增到 `tools`，不要在 `services` 里直接散落 HTTP 请求
-- 如果修改模型调用链、会话存储或响应结构，必须评估兼容性与回滚方式
+- 如果修改模型调用链、会话存储、鉴权方式或响应结构，必须评估兼容性与回滚方式
 - 如果新增核心功能，应补测试
 - 如果是高风险改动，应补结构化日志字段，例如 `request_id`、`session_id`、`task_id`
 
 不建议的做法：
 
 - 在 `routers` 中直接编排 Agent 逻辑
+- 在 `routers` 中直接解析 token 或拼接用户权限逻辑
 - 在 `frontend` 中硬编码后端内部规则
 - 为了快速修复而绕过现有服务分层
 
@@ -194,6 +239,9 @@ python -m pytest -q
 
 如果改动影响前端联调，建议额外验证：
 
+- 注册、登录、退出是否正常
+- 登录后是否能查询自己的会话
+- 不同用户是否发生会话串读
 - 首页是否可打开
 - 聊天请求是否成功
 - 会话模式是否可持续发送消息
@@ -208,11 +256,13 @@ python -m pytest -q
 3. `README.md`：项目概览与启动方式
 4. `backend/README.md` / `frontend/README.md`：子模块说明
 5. `docs/roadmap_backlog.md` 与 `docs/industrial_product_plan.md`：后续规划
+6. `docs/上线计划_第一阶段总结.md` 与 `docs/上线计划_第二阶段总结.md`：已完成阶段沉淀
 
 ## 12. 适合代理优先处理的任务
 
 - 保持现有聊天链路稳定
 - 在不破坏分层的前提下补充能力
+- 在保持权限边界的前提下扩展会话与用户能力
 - 修复前后端接口不一致问题
 - 为关键服务增加测试
 - 为会话记忆与流式返回补充健壮性处理
@@ -224,6 +274,7 @@ python -m pytest -q
 - 是否改在了正确目录层级
 - 是否影响前端当前已使用接口
 - 是否影响会话记忆回退策略
+- 是否影响当前登录态或会话权限边界
 - 是否需要同步更新测试或 README
 - 是否会引入新的密钥、外部依赖或部署成本
 

@@ -3,6 +3,8 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 from app.services.agent_service import run_agent, run_agent_with_session, stream_agent_with_session
 from app.services.chat_store import get_chat_store
+from app.services.task_broker import ChatTaskJob, get_task_broker
+from app.services.task_store import get_task_store
 
 
 def list_chat_sessions(user_id: str) -> list[dict]:
@@ -29,6 +31,53 @@ def delete_chat_session(user_id: str, session_id: str) -> bool:
         return get_chat_store().delete_session(user_id=user_id, session_id=session_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden session access") from exc
+
+
+def create_chat_task(user_id: str, session_id: str, message: str, request_id: str | None = None) -> dict:
+    chat_store = get_chat_store()
+    try:
+        chat_store.ensure_session(user_id=user_id, session_id=session_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden session access") from exc
+
+    task = get_task_store().create_chat_task(
+        user_id=user_id,
+        session_id=session_id,
+        input_text=message,
+        request_id=request_id,
+    )
+    get_task_broker().publish_chat_task(
+        ChatTaskJob(
+            task_id=task["id"],
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+            request_id=request_id,
+        )
+    )
+    return task
+
+
+def get_chat_task(user_id: str, task_id: str) -> dict:
+    task = get_task_store().get_chat_task(user_id=user_id, task_id=task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task
+
+
+def get_chat_task_result(user_id: str, task_id: str) -> dict:
+    task = get_chat_task(user_id=user_id, task_id=task_id)
+    if task["status"] != "succeeded":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task is not ready, current status={task['status']}",
+        )
+    return {
+        "task_id": task["id"],
+        "status": task["status"],
+        "result": task["result"],
+        "session_id": task["session_id"],
+    }
 
 
 def agent_chat(message: str) -> dict:

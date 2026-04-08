@@ -1,20 +1,36 @@
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.core.logging import setup_logging
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.system import router as system_router
+from app.services.task_worker import get_task_worker
 
 
 setup_logging()
 logger = logging.getLogger("app.request")
 
-app = FastAPI(title="StudyMate Agent API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.task_broker_backend == "inmemory":
+        get_task_worker().start()
+    else:
+        logger.info("Skip embedded task worker startup because TASK_BROKER_BACKEND=%s", settings.task_broker_backend)
+    try:
+        yield
+    finally:
+        if settings.task_broker_backend == "inmemory":
+            get_task_worker().stop()
+
+
+app = FastAPI(title="StudyMate Agent API", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/")

@@ -11,8 +11,11 @@ from app.services.chat_service import (
     agent_chat,
     agent_session_chat,
     agent_session_chat_stream,
+    create_chat_task,
     create_chat_session,
     delete_chat_session,
+    get_chat_task,
+    get_chat_task_result,
     list_chat_messages,
     list_chat_sessions,
 )
@@ -31,6 +34,11 @@ class SessionChatRequest(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     title: str | None = Field(default=None, max_length=80)
+
+
+class CreateChatTaskRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
 
 
 @router.get("/chat/sessions", response_model=ApiResponse)
@@ -57,6 +65,31 @@ def delete_chat_session_route(session_id: str, current_user: dict = Depends(get_
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return ApiResponse(data={"deleted": True, "session_id": session_id})
+
+
+@router.post("/chat/tasks", response_model=ApiResponse)
+def post_chat_tasks(
+    req: CreateChatTaskRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    task = create_chat_task(
+        user_id=current_user["id"],
+        session_id=req.session_id,
+        message=req.message,
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return ApiResponse(data=task)
+
+
+@router.get("/chat/tasks/{task_id}", response_model=ApiResponse)
+def get_chat_task_route(task_id: str, current_user: dict = Depends(get_current_user)):
+    return ApiResponse(data=get_chat_task(user_id=current_user["id"], task_id=task_id))
+
+
+@router.get("/chat/tasks/{task_id}/result", response_model=ApiResponse)
+def get_chat_task_result_route(task_id: str, current_user: dict = Depends(get_current_user)):
+    return ApiResponse(data=get_chat_task_result(user_id=current_user["id"], task_id=task_id))
 
 
 @router.post("/chat/agent", response_model=ApiResponse)

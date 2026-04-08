@@ -19,6 +19,10 @@ class Settings:
     auth_secret_key: str
     auth_access_token_ttl_seconds: int
     auth_refresh_token_ttl_seconds: int
+    task_broker_backend: str
+    kafka_bootstrap_servers: str | None
+    kafka_chat_task_topic: str
+    kafka_chat_task_consumer_group: str
 
 
 settings = Settings(
@@ -36,4 +40,8 @@ settings = Settings(
     auth_secret_key=os.getenv("AUTH_SECRET_KEY", "dev-secret-change-me"),
     auth_access_token_ttl_seconds=int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")),
     auth_refresh_token_ttl_seconds=int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", "1209600")),
+    task_broker_backend=os.getenv("TASK_BROKER_BACKEND", "inmemory").strip().lower(),
+    kafka_bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS"),
+    kafka_chat_task_topic=os.getenv("KAFKA_CHAT_TASK_TOPIC", "chat.request"),
+    kafka_chat_task_consumer_group=os.getenv("KAFKA_CHAT_TASK_CONSUMER_GROUP", "studymate-chat-worker"),
 )
