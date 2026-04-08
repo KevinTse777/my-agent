@@ -15,6 +15,10 @@ class Settings:
     postgres_url: str | None
     memory_context_window: int
     memory_context_ttl_seconds: int
+    business_chat_history_limit: int
+    auth_secret_key: str
+    auth_access_token_ttl_seconds: int
+    auth_refresh_token_ttl_seconds: int
 
 
 settings = Settings(
@@ -28,4 +32,8 @@ settings = Settings(
     postgres_url=os.getenv("POSTGRES_URL"),
     memory_context_window=int(os.getenv("MEMORY_CONTEXT_WINDOW", "12")),
     memory_context_ttl_seconds=int(os.getenv("MEMORY_CONTEXT_TTL_SECONDS", "1800")),
+    business_chat_history_limit=int(os.getenv("BUSINESS_CHAT_HISTORY_LIMIT", "100")),
+    auth_secret_key=os.getenv("AUTH_SECRET_KEY", "dev-secret-change-me"),
+    auth_access_token_ttl_seconds=int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")),
+    auth_refresh_token_ttl_seconds=int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", "1209600")),
 )

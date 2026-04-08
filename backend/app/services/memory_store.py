@@ -44,6 +44,7 @@ class PostgresMemoryStore:
             min_size=1,
             max_size=10,
             timeout=5,
+            open=True,
         )
 
     def load_context(self, session_id: str) -> list[dict[str, str]]:

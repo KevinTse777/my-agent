@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.core.logging import setup_logging
+from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.system import router as system_router
 
@@ -77,4 +78,5 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(system_router)
+app.include_router(auth_router)
 app.include_router(chat_router)
