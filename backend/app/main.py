@@ -6,11 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.core.config import settings
+from app.core.config import settings, validate_runtime_configuration
 from app.core.logging import setup_logging
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.system import router as system_router
+from app.services.rate_limit_service import get_api_rate_limiter
 from app.services.task_worker import get_task_worker
 
 
@@ -19,6 +20,7 @@ logger = logging.getLogger("app.request")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_runtime_configuration()
     if settings.task_broker_backend == "inmemory":
         get_task_worker().start()
     else:
@@ -48,17 +50,37 @@ async def request_logging_middleware(request: Request, call_next):
     request_id = str(uuid.uuid4())[:8]
     request.state.request_id = request_id
     start = time.perf_counter()
+    limited = False
 
-    response = await call_next(request)
+    limit_decision = get_api_rate_limiter().check(request)
+    if limit_decision and limit_decision.limited:
+        limited = True
+        response = JSONResponse(
+            status_code=429,
+            content={
+                "success": False,
+                "message": "Too Many Requests",
+                "data": None,
+                "request_id": request_id,
+            },
+        )
+        response.headers["Retry-After"] = str(limit_decision.retry_after_seconds)
+    else:
+        response = await call_next(request)
+
+    if limit_decision:
+        response.headers["X-RateLimit-Limit"] = str(limit_decision.limit)
+        response.headers["X-RateLimit-Remaining"] = str(limit_decision.remaining)
 
     duration_ms = (time.perf_counter() - start) * 1000
     logger.info(
-        "request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+        "request_id=%s method=%s path=%s status=%s duration_ms=%.2f limited=%s",
         request_id,
         request.method,
         request.url.path,
         response.status_code,
         duration_ms,
+        limited,
     )
     response.headers["X-Request-ID"] = request_id
     return response

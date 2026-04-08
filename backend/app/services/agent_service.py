@@ -9,7 +9,7 @@ from langchain.agents import create_agent
 from langchain.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
-from app.core.config import settings
+from app.core.config import settings, validate_runtime_configuration
 from app.services.memory_store import (
     HybridMemoryStore,
     InMemoryStore,
@@ -65,6 +65,7 @@ def _build_agent():
 
 @lru_cache(maxsize=1)
 def _build_memory_store():
+    validate_runtime_configuration()
     max_window = settings.memory_context_window
 
     if settings.postgres_url and settings.redis_url:

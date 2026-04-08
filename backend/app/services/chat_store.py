@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
-from app.core.config import settings
+from app.core.config import settings, validate_runtime_configuration
 
 
 def _utc_now() -> datetime:
@@ -432,6 +432,7 @@ class PostgresChatStore:
 
 @lru_cache(maxsize=1)
 def get_chat_store() -> ChatStore:
+    validate_runtime_configuration()
     if settings.postgres_url:
         try:
             return PostgresChatStore(settings.postgres_url)

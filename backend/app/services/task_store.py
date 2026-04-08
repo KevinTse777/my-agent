@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
-from app.core.config import settings
+from app.core.config import settings, validate_runtime_configuration
 
 
 def _utc_now() -> datetime:
@@ -40,6 +40,7 @@ class ChatTaskRecord:
     input_text: str
     status: str
     request_id: str | None
+    retry_count: int
     result_payload: dict[str, Any]
     error_message: str | None
     created_at: datetime
@@ -55,6 +56,7 @@ class ChatTaskRecord:
             "input_text": self.input_text,
             "status": self.status,
             "request_id": self.request_id,
+            "retry_count": self.retry_count,
             "result": self.result_payload,
             "error_message": self.error_message,
             "created_at": _to_iso(self.created_at),
@@ -80,6 +82,9 @@ class TaskStore(Protocol):
     def mark_chat_task_succeeded(self, task_id: str, result_payload: dict[str, Any]) -> dict[str, Any] | None:
         ...
 
+    def requeue_chat_task(self, task_id: str, error_message: str) -> dict[str, Any] | None:
+        ...
+
     def mark_chat_task_failed(self, task_id: str, error_message: str) -> dict[str, Any] | None:
         ...
 
@@ -97,6 +102,7 @@ class InMemoryTaskStore:
             input_text=input_text,
             status="queued",
             request_id=request_id,
+            retry_count=0,
             result_payload={},
             error_message=None,
             created_at=now,
@@ -139,12 +145,24 @@ class InMemoryTaskStore:
         task.updated_at = now
         return task.to_dict()
 
+    def requeue_chat_task(self, task_id: str, error_message: str) -> dict[str, Any] | None:
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+        now = _utc_now()
+        task.status = "queued"
+        task.retry_count += 1
+        task.error_message = error_message
+        task.updated_at = now
+        return task.to_dict()
+
     def mark_chat_task_failed(self, task_id: str, error_message: str) -> dict[str, Any] | None:
         task = self._tasks.get(task_id)
         if task is None:
             return None
         now = _utc_now()
         task.status = "failed"
+        task.retry_count += 1
         task.error_message = error_message
         task.finished_at = now
         task.updated_at = now
@@ -169,6 +187,7 @@ class PostgresTaskStore:
                         input_text TEXT NOT NULL,
                         status TEXT NOT NULL,
                         request_id TEXT NULL,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
                         result_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
                         error_message TEXT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -176,6 +195,12 @@ class PostgresTaskStore:
                         started_at TIMESTAMPTZ NULL,
                         finished_at TIMESTAMPTZ NULL
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE app_chat_tasks
+                    ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0
                     """
                 )
                 cur.execute(
@@ -194,12 +219,13 @@ class PostgresTaskStore:
             input_text=row[3],
             status=row[4],
             request_id=row[5],
-            result_payload=_normalize_json_dict(row[6]),
-            error_message=row[7],
-            created_at=row[8],
-            updated_at=row[9],
-            started_at=row[10],
-            finished_at=row[11],
+            retry_count=row[6],
+            result_payload=_normalize_json_dict(row[7]),
+            error_message=row[8],
+            created_at=row[9],
+            updated_at=row[10],
+            started_at=row[11],
+            finished_at=row[12],
         )
 
     def create_chat_task(self, user_id: str, session_id: str, input_text: str, request_id: str | None) -> dict[str, Any]:
@@ -210,7 +236,7 @@ class PostgresTaskStore:
                     """
                     INSERT INTO app_chat_tasks (id, user_id, session_id, input_text, status, request_id)
                     VALUES (%s, %s, %s, %s, 'queued', %s)
-                    RETURNING id, user_id, session_id, input_text, status, request_id, result_payload,
+                    RETURNING id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                               error_message, created_at, updated_at, started_at, finished_at
                     """,
                     (task_id, user_id, session_id, input_text, request_id),
@@ -224,7 +250,7 @@ class PostgresTaskStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, user_id, session_id, input_text, status, request_id, result_payload,
+                    SELECT id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                            error_message, created_at, updated_at, started_at, finished_at
                     FROM app_chat_tasks
                     WHERE id = %s AND user_id = %s
@@ -239,7 +265,7 @@ class PostgresTaskStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, user_id, session_id, input_text, status, request_id, result_payload,
+                    SELECT id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                            error_message, created_at, updated_at, started_at, finished_at
                     FROM app_chat_tasks
                     WHERE id = %s
@@ -257,7 +283,7 @@ class PostgresTaskStore:
                     UPDATE app_chat_tasks
                     SET status = 'running', started_at = NOW(), updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, user_id, session_id, input_text, status, request_id, result_payload,
+                    RETURNING id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                               error_message, created_at, updated_at, started_at, finished_at
                     """,
                     (task_id,),
@@ -278,10 +304,30 @@ class PostgresTaskStore:
                         finished_at = NOW(),
                         updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, user_id, session_id, input_text, status, request_id, result_payload,
+                    RETURNING id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                               error_message, created_at, updated_at, started_at, finished_at
                     """,
                     (json.dumps(result_payload, ensure_ascii=False), task_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return self._task_from_row(row).to_dict() if row else None
+
+    def requeue_chat_task(self, task_id: str, error_message: str) -> dict[str, Any] | None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app_chat_tasks
+                    SET status = 'queued',
+                        retry_count = retry_count + 1,
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
+                              error_message, created_at, updated_at, started_at, finished_at
+                    """,
+                    (error_message, task_id),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -294,11 +340,12 @@ class PostgresTaskStore:
                     """
                     UPDATE app_chat_tasks
                     SET status = 'failed',
+                        retry_count = retry_count + 1,
                         error_message = %s,
                         finished_at = NOW(),
                         updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, user_id, session_id, input_text, status, request_id, result_payload,
+                    RETURNING id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
                               error_message, created_at, updated_at, started_at, finished_at
                     """,
                     (error_message, task_id),
@@ -310,6 +357,7 @@ class PostgresTaskStore:
 
 @lru_cache(maxsize=1)
 def get_task_store() -> TaskStore:
+    validate_runtime_configuration()
     if settings.postgres_url:
         try:
             return PostgresTaskStore(settings.postgres_url)

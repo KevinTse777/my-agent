@@ -4,6 +4,7 @@ import logging
 import threading
 from functools import lru_cache
 
+from app.core.config import settings
 from app.services.task_broker import ChatTaskJob, get_task_broker
 from app.services.task_store import get_task_store
 
@@ -36,11 +37,35 @@ class TaskWorker:
         from app.services.chat_service import agent_session_chat
 
         task_store = get_task_store()
+        task = task_store.get_chat_task_any_user(job.task_id)
+        if task is None:
+            logger.warning("skip chat task because record is missing task_id=%s", job.task_id)
+            return
+        if task["status"] != "queued":
+            logger.info("skip chat task because status is already %s task_id=%s", task["status"], job.task_id)
+            return
+
         task_store.mark_chat_task_running(job.task_id)
         try:
             result = agent_session_chat(job.user_id, job.session_id, job.message)
             task_store.mark_chat_task_succeeded(job.task_id, result)
         except Exception as exc:
+            retry_count = int(task.get("retry_count", 0))
+            if retry_count < settings.task_worker_max_retries:
+                updated = task_store.requeue_chat_task(job.task_id, str(exc))
+                next_retry_count = updated["retry_count"] if updated else retry_count + 1
+                logger.warning(
+                    "chat task will retry task_id=%s user_id=%s session_id=%s request_id=%s retry_count=%s error=%s",
+                    job.task_id,
+                    job.user_id,
+                    job.session_id,
+                    job.request_id,
+                    next_retry_count,
+                    str(exc),
+                )
+                self._broker.publish_chat_task(job)
+                return
+
             logger.exception(
                 "chat task failed task_id=%s user_id=%s session_id=%s request_id=%s error=%s",
                 job.task_id,
@@ -49,7 +74,9 @@ class TaskWorker:
                 job.request_id,
                 str(exc),
             )
-            task_store.mark_chat_task_failed(job.task_id, str(exc))
+            failed = task_store.mark_chat_task_failed(job.task_id, str(exc))
+            final_retry_count = failed["retry_count"] if failed else retry_count + 1
+            self._broker.publish_chat_task_dlq(job, str(exc), final_retry_count)
 
     def run_forever(self) -> None:
         self._broker.consume_chat_tasks(self.process_job, self._stop_event)

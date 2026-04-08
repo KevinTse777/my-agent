@@ -46,6 +46,29 @@ class PostgresMemoryStore:
             timeout=5,
             open=True,
         )
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_messages (
+                        id BIGSERIAL PRIMARY KEY,
+                        session_id VARCHAR(128) NOT NULL,
+                        role VARCHAR(32) NOT NULL CHECK (role IN ('user', 'assistant')),
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created_at
+                    ON chat_messages (session_id, created_at DESC)
+                    """
+                )
+            conn.commit()
 
     def load_context(self, session_id: str) -> list[dict[str, str]]:
         sql = """

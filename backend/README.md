@@ -60,10 +60,24 @@ backend/
 pip install fastapi "uvicorn[standard]" openai python-dotenv \
   langchain langchain-openai langgraph tavily-python psycopg[binary] psycopg-pool redis
 
+# 可选：启动本地 Postgres + Kafka（标准 consumer group 联调基线）
+docker compose -f docker-compose.kafka-local.yml up -d
+
 uvicorn app.main:app --reload --app-dir backend --port 8000
 
 # 独立 worker（Kafka 模式）
+python backend/scripts/run_task_worker.py --check
+python backend/scripts/run_task_worker.py --diagnose
 python backend/scripts/run_task_worker.py
+
+# API -> Kafka -> worker -> Postgres 全链路 smoke 验收
+python backend/scripts/smoke_chat_task_flow.py --base-url http://127.0.0.1:8000
+
+# 查看 DLQ 中的失败任务
+python backend/scripts/read_chat_task_dlq.py --from-beginning --max-messages 5
+
+# DLQ publish/read 最小 smoke 验收
+python backend/scripts/smoke_chat_task_dlq_flow.py
 ```
 
 ## 本地验证
@@ -78,6 +92,14 @@ python -m pytest -q
 
 ## 环境变量
 请参考项目根目录 `.env.example`。
+
+当前与 Phase 5 入口保护直接相关的关键配置包括：
+
+- `API_RATE_LIMIT_ENABLED`
+- `API_RATE_LIMIT_WINDOW_SECONDS`
+- `API_RATE_LIMIT_AUTH_MAX_REQUESTS`
+- `API_RATE_LIMIT_CHAT_MAX_REQUESTS`
+- `API_RATE_LIMIT_TASK_CREATE_MAX_REQUESTS`
 
 ## 会话记忆策略
 优先级：`Postgres + Redis` -> `Postgres` -> `InMemory`。
@@ -99,4 +121,26 @@ python -m pytest -q
 - Worker 负责消费任务并执行带会话聊天链路，随后写回业务会话与任务结果
 - 默认 broker 为进程内 `InMemory` 队列，便于本地直接运行
 - 切换 `TASK_BROKER_BACKEND=kafka` 后，API 不再启动内置 worker，需要单独运行 `backend/scripts/run_task_worker.py`
+- 仓库根目录已新增 `docker-compose.kafka-local.yml`，用于固定本地单机 `Postgres + Apache Kafka(KRaft)` 联调基线
+- 可先运行 `python backend/scripts/run_task_worker.py --check` 检查当前 `consumer_mode` 是标准 `consumer_group` 还是本地 `direct_partition_fallback`
+- 可继续运行 `python backend/scripts/run_task_worker.py --diagnose` 检查 Kafka broker 连通性、topic metadata 与 `__consumer_offsets` 可见性
+- 可运行 `python backend/scripts/smoke_chat_task_flow.py` 执行最小全链路验收：注册、登录、建会话、提 task、轮询结果、查会话消息
+- 当前已补最小重试与 DLQ：失败任务会按 `TASK_WORKER_MAX_RETRIES` 重试，超过次数后发布到 `KAFKA_CHAT_TASK_DLQ_TOPIC`
+- 可运行 `python backend/scripts/read_chat_task_dlq.py` 直接查看 `KAFKA_CHAT_TASK_DLQ_TOPIC` 中的失败任务
+- 可运行 `python backend/scripts/smoke_chat_task_dlq_flow.py` 直接做 DLQ publish/read 最小验收
 - Kafka 模式依赖额外安装 `kafka-python`
+
+## API 限流策略
+- 当前先对高风险写接口做入口限流：
+  - `POST /auth/register`
+  - `POST /auth/login`
+  - `POST /auth/refresh`
+  - `POST /chat/agent`
+  - `POST /chat/agent/session`
+  - `POST /chat/agent/session/stream`
+  - `POST /chat/tasks`
+- 默认优先使用 `REDIS_URL` 对应的 Redis 作为共享计数存储；未配置或初始化失败时回退到进程内 `InMemory`
+- 命中限流时返回 `429 Too Many Requests`，并附带：
+  - `Retry-After`
+  - `X-RateLimit-Limit`
+  - `X-RateLimit-Remaining`

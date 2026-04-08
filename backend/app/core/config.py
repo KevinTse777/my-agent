@@ -1,4 +1,5 @@
 import os
+from importlib.util import find_spec
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -22,7 +23,14 @@ class Settings:
     task_broker_backend: str
     kafka_bootstrap_servers: str | None
     kafka_chat_task_topic: str
+    kafka_chat_task_dlq_topic: str
     kafka_chat_task_consumer_group: str
+    task_worker_max_retries: int
+    api_rate_limit_enabled: bool
+    api_rate_limit_window_seconds: int
+    api_rate_limit_auth_max_requests: int
+    api_rate_limit_chat_max_requests: int
+    api_rate_limit_task_create_max_requests: int
 
 
 settings = Settings(
@@ -43,5 +51,30 @@ settings = Settings(
     task_broker_backend=os.getenv("TASK_BROKER_BACKEND", "inmemory").strip().lower(),
     kafka_bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS"),
     kafka_chat_task_topic=os.getenv("KAFKA_CHAT_TASK_TOPIC", "chat.request"),
+    kafka_chat_task_dlq_topic=os.getenv("KAFKA_CHAT_TASK_DLQ_TOPIC", "chat.request.dlq"),
     kafka_chat_task_consumer_group=os.getenv("KAFKA_CHAT_TASK_CONSUMER_GROUP", "studymate-chat-worker"),
+    task_worker_max_retries=int(os.getenv("TASK_WORKER_MAX_RETRIES", "1")),
+    api_rate_limit_enabled=os.getenv("API_RATE_LIMIT_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+    api_rate_limit_window_seconds=int(os.getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60")),
+    api_rate_limit_auth_max_requests=int(os.getenv("API_RATE_LIMIT_AUTH_MAX_REQUESTS", "5")),
+    api_rate_limit_chat_max_requests=int(os.getenv("API_RATE_LIMIT_CHAT_MAX_REQUESTS", "10")),
+    api_rate_limit_task_create_max_requests=int(os.getenv("API_RATE_LIMIT_TASK_CREATE_MAX_REQUESTS", "10")),
 )
+
+
+def validate_runtime_configuration() -> None:
+    if settings.task_broker_backend != "kafka":
+        return
+
+    if not settings.kafka_bootstrap_servers:
+        raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required when TASK_BROKER_BACKEND=kafka")
+
+    if not settings.postgres_url:
+        raise RuntimeError(
+            "POSTGRES_URL is required when TASK_BROKER_BACKEND=kafka so API and worker can share auth/chat/task/memory storage."
+        )
+
+    if find_spec("kafka") is None:
+        raise RuntimeError(
+            "kafka-python is required when TASK_BROKER_BACKEND=kafka. Please install it before starting API or worker."
+        )
