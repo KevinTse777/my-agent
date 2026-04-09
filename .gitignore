@@ -35,3 +35,6 @@ dist/
 
 # Logs
 *.log
+
+# Obsidian
+.obsidian/

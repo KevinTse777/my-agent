@@ -31,6 +31,13 @@ class Settings:
     api_rate_limit_auth_max_requests: int
     api_rate_limit_chat_max_requests: int
     api_rate_limit_task_create_max_requests: int
+    auth_login_max_failed_attempts: int
+    auth_login_attempt_window_seconds: int
+    auth_login_lock_seconds: int
+    tool_call_timeout_seconds: float
+    calculator_tool_timeout_seconds: float
+    web_search_tool_timeout_seconds: float
+    user_active_task_limit: int
 
 
 settings = Settings(
@@ -59,6 +66,13 @@ settings = Settings(
     api_rate_limit_auth_max_requests=int(os.getenv("API_RATE_LIMIT_AUTH_MAX_REQUESTS", "5")),
     api_rate_limit_chat_max_requests=int(os.getenv("API_RATE_LIMIT_CHAT_MAX_REQUESTS", "10")),
     api_rate_limit_task_create_max_requests=int(os.getenv("API_RATE_LIMIT_TASK_CREATE_MAX_REQUESTS", "10")),
+    auth_login_max_failed_attempts=int(os.getenv("AUTH_LOGIN_MAX_FAILED_ATTEMPTS", "5")),
+    auth_login_attempt_window_seconds=int(os.getenv("AUTH_LOGIN_ATTEMPT_WINDOW_SECONDS", "900")),
+    auth_login_lock_seconds=int(os.getenv("AUTH_LOGIN_LOCK_SECONDS", "900")),
+    tool_call_timeout_seconds=float(os.getenv("TOOL_CALL_TIMEOUT_SECONDS", "8")),
+    calculator_tool_timeout_seconds=float(os.getenv("CALCULATOR_TOOL_TIMEOUT_SECONDS", os.getenv("TOOL_CALL_TIMEOUT_SECONDS", "8"))),
+    web_search_tool_timeout_seconds=float(os.getenv("WEB_SEARCH_TOOL_TIMEOUT_SECONDS", os.getenv("TOOL_CALL_TIMEOUT_SECONDS", "8"))),
+    user_active_task_limit=int(os.getenv("USER_ACTIVE_TASK_LIMIT", "3")),
 )
 
 

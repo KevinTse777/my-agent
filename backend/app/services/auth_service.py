@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.services.audit_service import record_audit_event
+from app.services.auth_security_service import get_auth_login_security_service
 from app.services.auth_store import UserRecord, get_auth_store, hash_token
 
 
@@ -123,22 +125,39 @@ def _normalize_email(email: str) -> str:
     return cleaned
 
 
-def register_user(email: str, username: str, password: str) -> dict:
+def register_user(email: str, username: str, password: str, request_id: str | None = None) -> dict:
     store = get_auth_store()
     email = _normalize_email(email)
     if store.get_user_by_email(email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
 
     user = store.create_user(email=email, username=username, password_hash=_build_password_hash(password))
-    return user.public_dict()
+    public_user = user.public_dict()
+    record_audit_event(
+        event_type="auth.register",
+        user_id=user.id,
+        request_id=request_id,
+        event_payload={"username": user.username},
+    )
+    return public_user
 
 
-def login_user(email: str, password: str) -> dict:
+def login_user(email: str, password: str, request_id: str | None = None) -> dict:
     store = get_auth_store()
     email = _normalize_email(email)
-    user = _require_active_user(store.get_user_by_email(email))
-    if not verify_password(password, user.password_hash):
+    security = get_auth_login_security_service()
+    security.ensure_login_allowed(email)
+
+    user = store.get_user_by_email(email)
+    if user is None or user.status != "active":
+        security.record_failed_login(email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+
+    if not verify_password(password, user.password_hash):
+        security.record_failed_login(email)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+
+    security.reset_failed_logins(email)
 
     expires_at = _utc_now() + timedelta(seconds=settings.auth_refresh_token_ttl_seconds)
     refresh_session = store.create_refresh_session(
@@ -149,6 +168,12 @@ def login_user(email: str, password: str) -> dict:
     refresh_token = _encode_token(_refresh_payload(user, refresh_session.id))
     store.update_refresh_session_hash(refresh_session.id, hash_token(refresh_token))
     access_token = _encode_token(_access_payload(user))
+    record_audit_event(
+        event_type="auth.login",
+        user_id=user.id,
+        request_id=request_id,
+        event_payload={"refresh_session_id": refresh_session.id},
+    )
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -158,7 +183,7 @@ def login_user(email: str, password: str) -> dict:
     }
 
 
-def refresh_user_token(refresh_token: str) -> dict:
+def refresh_user_token(refresh_token: str, request_id: str | None = None) -> dict:
     store = get_auth_store()
     payload = _decode_token(refresh_token)
     if payload.get("typ") != "refresh":
@@ -190,6 +215,12 @@ def refresh_user_token(refresh_token: str) -> dict:
     new_refresh_token = _encode_token(_refresh_payload(user, new_session.id))
     store.update_refresh_session_hash(new_session.id, hash_token(new_refresh_token))
     access_token = _encode_token(_access_payload(user))
+    record_audit_event(
+        event_type="auth.refresh",
+        user_id=user.id,
+        request_id=request_id,
+        event_payload={"refresh_session_id": new_session.id},
+    )
     return {
         "access_token": access_token,
         "refresh_token": new_refresh_token,
@@ -199,14 +230,21 @@ def refresh_user_token(refresh_token: str) -> dict:
     }
 
 
-def logout_user(refresh_token: str) -> dict:
+def logout_user(refresh_token: str, request_id: str | None = None) -> dict:
     payload = _decode_token(refresh_token)
     if payload.get("typ") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
     session_id = payload.get("sid")
+    user_id = payload.get("sub")
     if not isinstance(session_id, str):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     get_auth_store().revoke_refresh_session(session_id)
+    record_audit_event(
+        event_type="auth.logout",
+        user_id=user_id if isinstance(user_id, str) else None,
+        request_id=request_id,
+        event_payload={"refresh_session_id": session_id},
+    )
     return {"logged_out": True}
 
 

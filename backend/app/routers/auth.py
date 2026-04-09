@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.dependencies.auth import get_current_user
@@ -29,23 +29,23 @@ class RefreshRequest(BaseModel):
 
 
 @router.post("/auth/register", response_model=ApiResponse)
-def register(req: RegisterRequest):
-    return ApiResponse(data=register_user(req.email, req.username, req.password))
+def register(req: RegisterRequest, request: Request):
+    return ApiResponse(data=register_user(req.email, req.username, req.password, request_id=getattr(request.state, "request_id", None)))
 
 
 @router.post("/auth/login", response_model=ApiResponse)
-def login(req: LoginRequest):
-    return ApiResponse(data=login_user(req.email, req.password))
+def login(req: LoginRequest, request: Request):
+    return ApiResponse(data=login_user(req.email, req.password, request_id=getattr(request.state, "request_id", None)))
 
 
 @router.post("/auth/refresh", response_model=ApiResponse)
-def refresh(req: RefreshRequest):
-    return ApiResponse(data=refresh_user_token(req.refresh_token))
+def refresh(req: RefreshRequest, request: Request):
+    return ApiResponse(data=refresh_user_token(req.refresh_token, request_id=getattr(request.state, "request_id", None)))
 
 
 @router.post("/auth/logout", response_model=ApiResponse)
-def logout(req: RefreshRequest):
-    return ApiResponse(data=logout_user(req.refresh_token))
+def logout(req: RefreshRequest, request: Request):
+    return ApiResponse(data=logout_user(req.refresh_token, request_id=getattr(request.state, "request_id", None)))
 
 
 @router.get("/me", response_model=ApiResponse)

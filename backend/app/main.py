@@ -97,6 +97,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "data": None,
             "request_id": request_id,
         },
+        headers=exc.headers,
     )
 
 

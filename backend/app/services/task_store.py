@@ -70,6 +70,12 @@ class TaskStore(Protocol):
     def create_chat_task(self, user_id: str, session_id: str, input_text: str, request_id: str | None) -> dict[str, Any]:
         ...
 
+    def count_active_chat_tasks_for_user(self, user_id: str) -> int:
+        ...
+
+    def get_active_chat_task_for_session(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        ...
+
     def get_chat_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         ...
 
@@ -112,6 +118,23 @@ class InMemoryTaskStore:
         )
         self._tasks[task.id] = task
         return task.to_dict()
+
+    def count_active_chat_tasks_for_user(self, user_id: str) -> int:
+        return sum(
+            1
+            for task in self._tasks.values()
+            if task.user_id == user_id and task.status in {"queued", "running"}
+        )
+
+    def get_active_chat_task_for_session(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        candidates = [
+            task for task in self._tasks.values()
+            if task.user_id == user_id and task.session_id == session_id and task.status in {"queued", "running"}
+        ]
+        if not candidates:
+            return None
+        latest = sorted(candidates, key=lambda item: item.created_at, reverse=True)[0]
+        return latest.to_dict()
 
     def get_chat_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         task = self._tasks.get(task_id)
@@ -244,6 +267,40 @@ class PostgresTaskStore:
                 row = cur.fetchone()
             conn.commit()
         return self._task_from_row(row).to_dict()
+
+    def count_active_chat_tasks_for_user(self, user_id: str) -> int:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM app_chat_tasks
+                    WHERE user_id = %s
+                      AND status IN ('queued', 'running')
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def get_active_chat_task_for_session(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, user_id, session_id, input_text, status, request_id, retry_count, result_payload,
+                           error_message, created_at, updated_at, started_at, finished_at
+                    FROM app_chat_tasks
+                    WHERE user_id = %s
+                      AND session_id = %s
+                      AND status IN ('queued', 'running')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (user_id, session_id),
+                )
+                row = cur.fetchone()
+        return self._task_from_row(row).to_dict() if row else None
 
     def get_chat_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         with self._pool.connection() as conn:

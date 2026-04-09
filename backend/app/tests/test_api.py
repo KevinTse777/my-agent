@@ -1,4 +1,7 @@
 from contextlib import contextmanager
+import json
+import logging
+import time
 from uuid import uuid4
 
 import pytest
@@ -6,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings, validate_runtime_configuration
 from app.main import app
+from app.core.logging import RedactingFormatter, redact_sensitive_text
+from app.services.audit_store import get_audit_store
+from app.services.auth_security_service import get_auth_login_security_service
 from app.services.auth_store import get_auth_store
 from app.services.chat_store import get_chat_store
 from app.services.memory_store import PostgresMemoryStore
@@ -13,6 +19,10 @@ from app.services.rate_limit_service import get_api_rate_limiter
 from app.services.task_broker import ChatTaskJob, KafkaTaskBroker, get_task_broker, inspect_task_broker_runtime
 from app.services.task_store import get_task_store
 from app.services.task_worker import get_task_worker
+from app.tools.langchain_tools import (
+    _run_calculator_tool,
+    _run_web_search_tool,
+)
 
 client = TestClient(app)
 
@@ -28,6 +38,8 @@ def reset_stores():
     get_task_broker.cache_clear()
     get_task_worker.cache_clear()
     get_api_rate_limiter.cache_clear()
+    get_auth_login_security_service.cache_clear()
+    get_audit_store.cache_clear()
     object.__setattr__(settings, "task_broker_backend", "inmemory")
     object.__setattr__(settings, "postgres_url", None)
     object.__setattr__(settings, "redis_url", None)
@@ -41,6 +53,8 @@ def reset_stores():
     get_task_broker.cache_clear()
     get_task_worker.cache_clear()
     get_api_rate_limiter.cache_clear()
+    get_auth_login_security_service.cache_clear()
+    get_audit_store.cache_clear()
 
 
 def register_and_login(email: str | None = None, username: str | None = None, password: str = "password123"):
@@ -102,6 +116,13 @@ def test_register_login_me_refresh_logout_flow():
     assert logout_resp.status_code == 200
     assert logout_resp.json()["data"]["logged_out"] is True
 
+    audit_events = get_audit_store().list_events(limit=10)
+    event_types = [event["event_type"] for event in audit_events]
+    assert "auth.register" in event_types
+    assert "auth.login" in event_types
+    assert "auth.refresh" in event_types
+    assert "auth.logout" in event_types
+
 
 def test_api_rate_limit_blocks_repeated_login_attempts():
     with override_runtime_settings(
@@ -145,6 +166,173 @@ def test_api_rate_limit_blocks_repeated_login_attempts():
         assert third.headers["Retry-After"] == "60"
         assert third.headers["X-RateLimit-Limit"] == "2"
         assert third.headers["X-RateLimit-Remaining"] == "0"
+
+
+def test_login_security_locks_after_repeated_failed_attempts():
+    with override_runtime_settings(
+        api_rate_limit_enabled=False,
+        auth_login_max_failed_attempts=2,
+        auth_login_attempt_window_seconds=900,
+        auth_login_lock_seconds=120,
+    ):
+        get_api_rate_limiter.cache_clear()
+        get_auth_login_security_service.cache_clear()
+
+        password = "password123"
+        email = f"security_lock_{uuid4().hex[:8]}@example.com"
+        username = f"security_lock_{uuid4().hex[:8]}"
+        register_resp = client.post("/auth/register", json={"email": email, "username": username, "password": password})
+        assert register_resp.status_code == 200
+
+        first = client.post("/auth/login", json={"email": email, "password": "wrong-pass-1"})
+        second = client.post("/auth/login", json={"email": email, "password": "wrong-pass-2"})
+        third = client.post("/auth/login", json={"email": email, "password": password})
+
+        assert first.status_code == 401
+        assert second.status_code == 429
+        assert second.json()["message"] == "Too many failed login attempts. Try again later."
+        assert second.headers["Retry-After"] == "120"
+        assert third.status_code == 429
+        assert third.headers["Retry-After"] == "120"
+
+
+def test_login_security_success_resets_failed_attempts():
+    with override_runtime_settings(
+        api_rate_limit_enabled=False,
+        auth_login_max_failed_attempts=2,
+        auth_login_attempt_window_seconds=900,
+        auth_login_lock_seconds=120,
+    ):
+        get_api_rate_limiter.cache_clear()
+        get_auth_login_security_service.cache_clear()
+
+        password = "password123"
+        email = f"security_reset_{uuid4().hex[:8]}@example.com"
+        username = f"security_reset_{uuid4().hex[:8]}"
+        register_resp = client.post("/auth/register", json={"email": email, "username": username, "password": password})
+        assert register_resp.status_code == 200
+
+        failed = client.post("/auth/login", json={"email": email, "password": "wrong-pass-1"})
+        success = client.post("/auth/login", json={"email": email, "password": password})
+        failed_again = client.post("/auth/login", json={"email": email, "password": "wrong-pass-2"})
+
+        assert failed.status_code == 401
+        assert success.status_code == 200
+        assert failed_again.status_code == 401
+
+
+def test_login_security_unlocks_after_lock_window(monkeypatch):
+    with override_runtime_settings(
+        api_rate_limit_enabled=False,
+        auth_login_max_failed_attempts=2,
+        auth_login_attempt_window_seconds=900,
+        auth_login_lock_seconds=120,
+    ):
+        get_api_rate_limiter.cache_clear()
+        get_auth_login_security_service.cache_clear()
+
+        current_ts = 1_800_000_000
+        monkeypatch.setattr("app.services.auth_security_service._utc_now_ts", lambda: current_ts)
+
+        password = "password123"
+        email = f"security_unlock_{uuid4().hex[:8]}@example.com"
+        username = f"security_unlock_{uuid4().hex[:8]}"
+        register_resp = client.post("/auth/register", json={"email": email, "username": username, "password": password})
+        assert register_resp.status_code == 200
+
+        first = client.post("/auth/login", json={"email": email, "password": "wrong-pass-1"})
+        second = client.post("/auth/login", json={"email": email, "password": "wrong-pass-2"})
+        assert first.status_code == 401
+        assert second.status_code == 429
+
+        monkeypatch.setattr("app.services.auth_security_service._utc_now_ts", lambda: current_ts + 121)
+        unlocked = client.post("/auth/login", json={"email": email, "password": password})
+        assert unlocked.status_code == 200
+
+
+def test_web_search_tool_returns_timeout_payload(monkeypatch):
+    with override_runtime_settings(web_search_tool_timeout_seconds=0.1):
+        def slow_search(query: str, max_results: int = 3):
+            time.sleep(0.15)
+            return {"query": query, "count": max_results, "sources": [{"title": "late", "url": "https://example.com", "snippet": "late"}]}
+
+        monkeypatch.setattr("app.tools.langchain_tools.search_web_structured", slow_search)
+
+        raw = _run_web_search_tool("latest news")
+        payload = json.loads(raw)
+
+        assert payload["query"] == "latest news"
+        assert payload["count"] == 0
+        assert payload["sources"] == []
+        assert payload["error"] == "timeout"
+
+
+def test_web_search_tool_returns_structured_payload_when_successful(monkeypatch):
+    with override_runtime_settings(web_search_tool_timeout_seconds=0.5):
+        monkeypatch.setattr(
+            "app.tools.langchain_tools.search_web_structured",
+            lambda query, max_results=3: {
+                "query": query,
+                "count": 1,
+                "sources": [{"title": "ok", "url": "https://example.com/ok", "snippet": "ok"}],
+            },
+        )
+
+        raw = _run_web_search_tool("python")
+        payload = json.loads(raw)
+
+        assert payload["query"] == "python"
+        assert payload["count"] == 1
+        assert payload["sources"][0]["url"] == "https://example.com/ok"
+
+
+def test_calculator_tool_respects_timeout(monkeypatch):
+    with override_runtime_settings(calculator_tool_timeout_seconds=0.1):
+        monkeypatch.setattr("app.tools.langchain_tools.calculate", lambda expression: time.sleep(0.15) or 42)
+
+        with pytest.raises(RuntimeError, match="calculator_tool timed out"):
+            _run_calculator_tool("1+1")
+
+
+def test_redact_sensitive_text_masks_email_password_and_tokens():
+    text = (
+        'email=test@example.com password=secret123 access_token=abc.def.ghi '
+        'refresh_token=refresh-secret Authorization=Bearer abc.def.ghi'
+    )
+
+    redacted = redact_sensitive_text(text)
+
+    assert "test@example.com" not in redacted
+    assert "secret123" not in redacted
+    assert "refresh-secret" not in redacted
+    assert "abc.def.ghi" not in redacted
+    assert "[REDACTED_EMAIL]" in redacted
+    assert "password=[REDACTED]" in redacted
+    assert "access_token=[REDACTED]" in redacted
+    assert "refresh_token=[REDACTED]" in redacted
+    assert "Authorization=[REDACTED]" in redacted or "authorization=[REDACTED]" in redacted
+
+
+def test_redacting_formatter_masks_structured_sensitive_fields():
+    formatter = RedactingFormatter("%(message)s")
+    record = logging.LogRecord(
+        name="app.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='payload={"email":"user@example.com","password":"pw123","access_token":"abc.def.ghi"}',
+        args=(),
+        exc_info=None,
+    )
+
+    formatted = formatter.format(record)
+
+    assert "user@example.com" not in formatted
+    assert "pw123" not in formatted
+    assert "abc.def.ghi" not in formatted
+    assert '"email":"[REDACTED_EMAIL]"' in formatted
+    assert '"password":"[REDACTED]"' in formatted
+    assert '"access_token":"[REDACTED]"' in formatted
 
 
 def test_api_rate_limit_blocks_repeated_public_chat_requests(monkeypatch):
@@ -416,6 +604,11 @@ def test_chat_task_lifecycle_success(monkeypatch):
     assert len(messages) == 2
     assert messages[1]["content"] == "异步结果：帮我异步处理这段文本"
 
+    audit_events = get_audit_store().list_events(limit=10)
+    task_create_events = [event for event in audit_events if event["event_type"] == "chat.task.create"]
+    assert task_create_events
+    assert task_create_events[0]["event_payload"]["task_id"] == task["id"]
+
 
 def test_chat_task_result_not_ready(monkeypatch):
     auth = register_and_login()
@@ -441,6 +634,121 @@ def test_chat_task_result_not_ready(monkeypatch):
         headers=auth_headers(auth["access_token"]),
     )
     assert result_resp.status_code == 409
+
+
+def test_chat_task_rejects_duplicate_active_task_for_same_session(monkeypatch):
+    auth = register_and_login()
+
+    captured_jobs: list[ChatTaskJob] = []
+
+    def fake_enqueue(job: ChatTaskJob):
+        captured_jobs.append(job)
+
+    monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+
+    first = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_serial_001", "message": "第一个任务"},
+        headers=auth_headers(auth["access_token"]),
+    )
+    second = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_serial_001", "message": "第二个任务"},
+        headers=auth_headers(auth["access_token"]),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert "Session already has an active task" in second.json()["message"]
+    assert len(captured_jobs) == 1
+
+
+def test_chat_task_allows_parallel_tasks_for_different_sessions(monkeypatch):
+    auth = register_and_login()
+
+    captured_jobs: list[ChatTaskJob] = []
+
+    def fake_enqueue(job: ChatTaskJob):
+        captured_jobs.append(job)
+
+    monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+
+    first = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_parallel_a", "message": "任务 A"},
+        headers=auth_headers(auth["access_token"]),
+    )
+    second = client.post(
+        "/chat/tasks",
+        json={"session_id": "sess_task_parallel_b", "message": "任务 B"},
+        headers=auth_headers(auth["access_token"]),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(captured_jobs) == 2
+
+
+def test_chat_task_rejects_when_user_active_task_limit_reached(monkeypatch):
+    with override_runtime_settings(user_active_task_limit=2):
+        auth = register_and_login()
+
+        captured_jobs: list[ChatTaskJob] = []
+
+        def fake_enqueue(job: ChatTaskJob):
+            captured_jobs.append(job)
+
+        monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+
+        first = client.post(
+            "/chat/tasks",
+            json={"session_id": "sess_user_limit_a", "message": "任务 A"},
+            headers=auth_headers(auth["access_token"]),
+        )
+        second = client.post(
+            "/chat/tasks",
+            json={"session_id": "sess_user_limit_b", "message": "任务 B"},
+            headers=auth_headers(auth["access_token"]),
+        )
+        third = client.post(
+            "/chat/tasks",
+            json={"session_id": "sess_user_limit_c", "message": "任务 C"},
+            headers=auth_headers(auth["access_token"]),
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert third.status_code == 429
+        assert "User already has too many active tasks" in third.json()["message"]
+        assert len(captured_jobs) == 2
+
+
+def test_chat_task_user_limit_does_not_block_other_users(monkeypatch):
+    with override_runtime_settings(user_active_task_limit=1):
+        first_user = register_and_login("user_limit_1@example.com", "user_limit_1", "password123")
+        second_user = register_and_login("user_limit_2@example.com", "user_limit_2", "password123")
+
+        captured_jobs: list[ChatTaskJob] = []
+
+        def fake_enqueue(job: ChatTaskJob):
+            captured_jobs.append(job)
+
+        monkeypatch.setattr(get_task_broker(), "publish_chat_task", fake_enqueue)
+
+        first = client.post(
+            "/chat/tasks",
+            json={"session_id": "sess_user_limit_first", "message": "第一位用户任务"},
+            headers=auth_headers(first_user["access_token"]),
+        )
+        second = client.post(
+            "/chat/tasks",
+            json={"session_id": "sess_user_limit_second", "message": "第二位用户任务"},
+            headers=auth_headers(second_user["access_token"]),
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(captured_jobs) == 2
 
 
 def test_chat_task_access_isolated_between_users(monkeypatch):
@@ -790,3 +1098,8 @@ def test_task_worker_publishes_dlq_after_retry_exhausted(monkeypatch):
         assert latest["retry_count"] == 2
         assert published_jobs == []
         assert dlq_events == [("still boom", 2)]
+
+        audit_events = get_audit_store().list_events(limit=10)
+        failed_events = [event for event in audit_events if event["event_type"] == "chat.task.failed"]
+        assert failed_events
+        assert failed_events[0]["event_payload"]["task_id"] == task["id"]

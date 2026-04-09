@@ -5,6 +5,7 @@ import threading
 from functools import lru_cache
 
 from app.core.config import settings
+from app.services.audit_service import record_audit_event
 from app.services.task_broker import ChatTaskJob, get_task_broker
 from app.services.task_store import get_task_store
 
@@ -76,6 +77,17 @@ class TaskWorker:
             )
             failed = task_store.mark_chat_task_failed(job.task_id, str(exc))
             final_retry_count = failed["retry_count"] if failed else retry_count + 1
+            record_audit_event(
+                event_type="chat.task.failed",
+                user_id=job.user_id,
+                request_id=job.request_id,
+                event_payload={
+                    "task_id": job.task_id,
+                    "session_id": job.session_id,
+                    "retry_count": final_retry_count,
+                    "error_message": str(exc),
+                },
+            )
             self._broker.publish_chat_task_dlq(job, str(exc), final_retry_count)
 
     def run_forever(self) -> None:

@@ -2,6 +2,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.services.agent_service import run_agent, run_agent_with_session, stream_agent_with_session
+from app.services.audit_service import record_audit_event
 from app.services.chat_store import get_chat_store
 from app.services.task_broker import ChatTaskJob, get_task_broker
 from app.services.task_store import get_task_store
@@ -35,12 +36,34 @@ def delete_chat_session(user_id: str, session_id: str) -> bool:
 
 def create_chat_task(user_id: str, session_id: str, message: str, request_id: str | None = None) -> dict:
     chat_store = get_chat_store()
+    task_store = get_task_store()
     try:
         chat_store.ensure_session(user_id=user_id, session_id=session_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden session access") from exc
 
-    task = get_task_store().create_chat_task(
+    active_task_limit = max(1, settings.user_active_task_limit)
+    active_task_count = task_store.count_active_chat_tasks_for_user(user_id=user_id)
+    if active_task_count >= active_task_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"User already has too many active tasks active={active_task_count} "
+                f"limit={active_task_limit}"
+            ),
+        )
+
+    active_task = task_store.get_active_chat_task_for_session(user_id=user_id, session_id=session_id)
+    if active_task is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Session already has an active task task_id={active_task['id']} "
+                f"status={active_task['status']}"
+            ),
+        )
+
+    task = task_store.create_chat_task(
         user_id=user_id,
         session_id=session_id,
         input_text=message,
@@ -54,6 +77,12 @@ def create_chat_task(user_id: str, session_id: str, message: str, request_id: st
             message=message,
             request_id=request_id,
         )
+    )
+    record_audit_event(
+        event_type="chat.task.create",
+        user_id=user_id,
+        request_id=request_id,
+        event_payload={"task_id": task["id"], "session_id": session_id},
     )
     return task
 

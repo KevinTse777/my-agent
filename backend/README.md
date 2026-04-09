@@ -100,6 +100,13 @@ python -m pytest -q
 - `API_RATE_LIMIT_AUTH_MAX_REQUESTS`
 - `API_RATE_LIMIT_CHAT_MAX_REQUESTS`
 - `API_RATE_LIMIT_TASK_CREATE_MAX_REQUESTS`
+- `AUTH_LOGIN_MAX_FAILED_ATTEMPTS`
+- `AUTH_LOGIN_ATTEMPT_WINDOW_SECONDS`
+- `AUTH_LOGIN_LOCK_SECONDS`
+- `TOOL_CALL_TIMEOUT_SECONDS`
+- `CALCULATOR_TOOL_TIMEOUT_SECONDS`
+- `WEB_SEARCH_TOOL_TIMEOUT_SECONDS`
+- `USER_ACTIVE_TASK_LIMIT`
 
 ## 会话记忆策略
 优先级：`Postgres + Redis` -> `Postgres` -> `InMemory`。
@@ -114,11 +121,14 @@ python -m pytest -q
 - Access Token 与 Refresh Token 使用 `Bearer` 方式传递
 - 业务会话接口和带会话聊天接口需要登录后访问
 - `POST /chat/agent` 保留为开发调试用单轮入口
+- 已补最小登录失败保护：同一邮箱在窗口期内连续失败达到阈值后会被临时锁定，成功登录会清空失败计数
 
 ## 异步聊天任务策略
 - 当前已支持“提交任务 + 轮询结果”模式
 - API 负责创建 `chat task` 并投递到 `task broker`
 - Worker 负责消费任务并执行带会话聊天链路，随后写回业务会话与任务结果
+- 当前已补最小用户级并发保护：同一用户活跃任务数达到 `USER_ACTIVE_TASK_LIMIT` 后，再提新任务会返回 `429`
+- 当前已补最小会话级串行保护：同一用户的同一 `session_id` 若已有 `queued/running` 任务，再次提交会返回 `409`
 - 默认 broker 为进程内 `InMemory` 队列，便于本地直接运行
 - 切换 `TASK_BROKER_BACKEND=kafka` 后，API 不再启动内置 worker，需要单独运行 `backend/scripts/run_task_worker.py`
 - 仓库根目录已新增 `docker-compose.kafka-local.yml`，用于固定本地单机 `Postgres + Apache Kafka(KRaft)` 联调基线
@@ -144,3 +154,31 @@ python -m pytest -q
   - `Retry-After`
   - `X-RateLimit-Limit`
   - `X-RateLimit-Remaining`
+
+## 工具调用超时策略
+- 当前已补最小 tool timeout 包装器
+- `web_search_tool` 超时后不会无限阻塞，而是返回受控的超时结果：
+  - `count=0`
+  - `sources=[]`
+  - `error=timeout`
+- `calculator_tool` 超时会直接报错，避免表达式执行异常长期占住链路
+
+## 日志脱敏策略
+- 当前已补最小日志脱敏能力，统一在日志格式层生效
+- 默认会脱敏以下常见敏感信息：
+  - 邮箱
+  - `password`
+  - `access_token`
+  - `refresh_token`
+  - `Authorization` / `Bearer token`
+  - JWT 形态 token
+
+## 审计日志策略
+- 当前已补最小审计日志能力，默认写入 `audit_store`
+- 当前优先记录的关键事件包括：
+  - `auth.register`
+  - `auth.login`
+  - `auth.refresh`
+  - `auth.logout`
+  - `chat.task.create`
+  - `chat.task.failed`
